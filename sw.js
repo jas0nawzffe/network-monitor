@@ -1,7 +1,15 @@
-const CACHE = 'netmon-v5';
+const CACHE = 'netmon-v6';
+// Resolve paths relative to SW location (works for both local / and GitHub Pages /network-monitor/)
+const BASE = new URL('.', self.location).pathname;
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/', '/index.html', '/manifest.json', '/icon-192.png', '/icon-512.png'])));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll([
+    BASE,
+    BASE + 'index.html',
+    BASE + 'manifest.json',
+    BASE + 'icon-192.png',
+    BASE + 'icon-512.png'
+  ])));
   self.skipWaiting();
 });
 
