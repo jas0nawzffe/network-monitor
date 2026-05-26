@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0a14">
+<link rel="manifest" href="manifest.json">
+<title>运气网络监控</title>
+<style>
+  :root {
+    --bg: #0a0a14; --surface: #12122a; --surface2: #1a1a36;
+    --text: #e0e0f0; --text2: #8888aa; --text3: #5a5a7a;
+    --green: #00e5a0; --yellow: #f0c040; --orange: #f08040; --red: #e04040;
+    --blue: #4080e0; --purple: #8060e0; --cyan: #40c0d0;
+    --radius: 16px; --gap: 12px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f0f2f5; --surface: #fff; --surface2: #f8f9fa;
+      --text: #1a1a2e; --text2: #666; --text3: #999;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: linear-gradient(180deg, #152240 0%, #1e3a60 35%, #2a5a5a 100%);
+    color: var(--text); overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent; user-select: none;
+    transition: background 2s ease;
+  }
+  .app { max-width: 500px; margin: 0 auto; padding: 16px; min-height: 100vh; }
+  .app.safe-top { padding-top: max(16px, env(safe-area-inset-top)); }
+  .app.safe-bottom { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+
+  /* Header */
+  .header { display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; margin: -4px -4px 16px; border-radius: 20px;
+    background: rgba(18,18,42,0.35); border: 1px solid rgba(255,255,255,0.05); }
+  .header h1 { font-size: 1.2em; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .header h1 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+  .header h1 .dot.offline { background: var(--red); }
+  .status-bar { font-size: 0.78em; color: var(--text2); display: flex; gap: 8px; align-items: center; }
+  .status-bar span { padding: 3px 10px; border-radius: 12px; background: var(--surface2); font-size: 0.75em; }
+
+  /* Weather search */
+  .weather-search { position: relative; margin-bottom: 12px; }
+  .weather-search input { width: 100%; padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(18,18,42,0.5); color: var(--text); font-size: 0.88em; font-family: inherit;
+    outline: none; transition: border 0.2s; }
+  .weather-search input:focus { border-color: rgba(255,255,255,0.2); }
+  .weather-search input::placeholder { color: var(--text3); }
+  .city-list { position: absolute; top: 100%; left: 0; right: 0; z-index: 10; margin-top: 4px;
+    border-radius: 12px; background: var(--surface); border: 1px solid rgba(255,255,255,0.06); overflow: hidden; display: none; }
+  .city-list.open { display: block; }
+  .city-list .city-item { padding: 11px 14px; cursor: pointer; font-size: 0.85em;
+    border-bottom: 1px solid rgba(255,255,255,0.04); transition: background 0.15s; }
+  .city-list .city-item:last-child { border-bottom: none; }
+  .city-list .city-item:hover, .city-list .city-item:active { background: var(--surface2); }
+  .city-list .city-item .region { font-size: 0.8em; color: var(--text3); margin-left: 6px; }
+
+  /* Current weather bar */
+  .cur-weather { display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+    padding: 10px 14px; border-radius: 14px; background: rgba(18,18,42,0.35);
+    border: 1px solid rgba(255,255,255,0.05); font-size: 0.85em; }
+  .cur-weather .cw-icon { font-size: 1.5em; }
+  .cur-weather .cw-info { flex: 1; line-height: 1.4; }
+  .cur-weather .cw-city { font-weight: 600; }
+  .cur-weather .cw-desc { color: var(--text2); font-size: 0.85em; }
+  .cur-weather .cw-temp { font-size: 1.4em; font-weight: 700; font-family: 'JetBrains Mono','Consolas',monospace; }
+  .cur-weather .cw-detail { text-align: right; font-size: 0.78em; color: var(--text2); line-height: 1.5; }
+
+  /* 7-day forecast row */
+  .fc-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px;
+    margin-bottom: var(--gap); scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; }
+  .fc-row::-webkit-scrollbar { height: 0; }
+  .fc-day { flex: 0 0 72px; scroll-snap-align: start; text-align: center;
+    padding: 12px 4px; border-radius: 14px; background: rgba(18,18,42,0.35);
+    border: 1px solid rgba(255,255,255,0.04); }
+  .fc-day .fc-dow { font-size: 0.7em; color: var(--text3); margin-bottom: 6px; }
+  .fc-day .fc-emoji { font-size: 1.3em; margin-bottom: 6px; }
+  .fc-day .fc-temp { font-family: 'JetBrains Mono','Consolas',monospace; font-size: 0.78em; font-weight: 600; }
+  .fc-day .fc-temp .lo { color: var(--text3); font-weight: 400; }
+  .fc-day .fc-rain { font-size: 0.68em; color: var(--cyan); margin-top: 4px; }
+
+  /* Speed gauge */
+  .gauge { text-align: center; padding: 20px 0 12px; }
+  .gauge .speed-num { font-size: 4em; font-weight: 700; font-variant-numeric: tabular-nums;
+    font-family: 'JetBrains Mono', 'Consolas', 'SF Mono', monospace; letter-spacing: -2px; }
+  .gauge .speed-unit { font-size: 0.3em; font-weight: 400; opacity: 0.7; }
+  .gauge .speed-label { font-size: 0.85em; color: var(--text2); margin-top: 4px; letter-spacing: 1px; }
+  .gauge .speed-arrow { font-size: 0.5em; margin-right: 4px; }
+  .gauge .divider { width: 60px; height: 2px; background: var(--surface2); margin: 12px auto; border-radius: 1px; }
+  .speed-fast { color: var(--green); } .speed-mid { color: var(--yellow); } .speed-slow { color: var(--orange); }
+
+  /* Upload row */
+  .upload-row { text-align: center; margin-bottom: 8px; }
+  .upload-row .val { font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 1.1em; color: var(--text2); }
+  .upload-row .lbl { font-size: 0.75em; color: var(--text3); }
+
+  /* Rating badge */
+  .rating { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 8px; }
+  .rating .badge { font-size: 0.8em; font-weight: 700; padding: 6px 20px; border-radius: 20px; letter-spacing: 1px; }
+  .badge-fast { background: rgba(0,229,160,0.15); color: var(--green); }
+  .badge-mid { background: rgba(240,192,64,0.15); color: var(--yellow); }
+  .badge-slow { background: rgba(240,128,64,0.15); color: var(--orange); }
+  .badge-unknown { background: var(--surface2); color: var(--text3); }
+
+  /* Progress bar */
+  .meter { width: 100%; max-width: 260px; margin: 8px auto 0; }
+  .meter .track { width: 100%; height: 6px; border-radius: 3px; background: var(--surface2); position: relative; overflow: hidden; }
+  .meter .fill { height: 100%; border-radius: 3px; transition: width 0.6s ease; }
+  .meter .marks { display: flex; justify-content: space-between; margin-top: 6px; font-size: 0.65em; color: var(--text3); padding: 0 2px; }
+
+  /* Comparison card */
+  .compare { display: flex; flex-direction: column; gap: 8px; }
+  .compare .row { display: flex; align-items: center; gap: 8px; font-size: 0.8em; }
+  .compare .row .tag { min-width: 36px; text-align: center; padding: 2px 8px; border-radius: 10px; font-size: 0.72em; font-weight: 600; }
+  .compare .row .bar-wrap { flex: 1; height: 5px; border-radius: 3px; background: var(--surface2); overflow: hidden; }
+  .compare .row .bar-fill { height: 100%; border-radius: 3px; opacity: 0.7; }
+  .compare .row .val-r { min-width: 48px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 0.8em; color: var(--text2); }
+  .compare .row.current { font-weight: 600; }
+  .compare .row.current .tag { background: var(--surface2); }
+
+  /* Cards grid */
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); margin-bottom: var(--gap); }
+  .card {
+    background: var(--surface); border-radius: var(--radius); padding: 16px;
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+  .card .card-label { font-size: 0.72em; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+  .card .card-value { font-size: 1.5em; font-weight: 600; font-family: 'JetBrains Mono', 'Consolas', monospace; }
+  .card .card-sub { font-size: 0.72em; color: var(--text2); margin-top: 2px; }
+  .card.full { grid-column: 1 / -1; }
+
+  /* Chart */
+  .chart-card { background: var(--surface); border-radius: var(--radius); padding: 16px; margin-bottom: var(--gap);
+    border: 1px solid rgba(255,255,255,0.04); }
+  .chart-card .chart-label { font-size: 0.72em; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  canvas { width: 100%; height: 100px; display: block; border-radius: 8px; }
+
+  /* Buttons */
+  .actions { display: flex; gap: var(--gap); margin-bottom: var(--gap); }
+  .btn { flex: 1; padding: 14px; border-radius: var(--radius); border: none; font-size: 0.9em;
+    font-weight: 600; cursor: pointer; transition: transform 0.15s, opacity 0.15s;
+    font-family: inherit; color: #fff; }
+  .btn:active { transform: scale(0.97); opacity: 0.85; }
+  .btn-primary { background: linear-gradient(135deg, var(--blue), var(--purple)); }
+  .btn-secondary { background: var(--surface2); color: var(--text); }
+  .btn-sm { flex: 0.5; padding: 10px; font-size: 0.8em; }
+
+  /* Toast */
+  .toast { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+    background: var(--surface2); color: var(--text); padding: 10px 24px;
+    border-radius: 20px; font-size: 0.85em; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100; }
+  .toast.show { opacity: 1; }
+
+  /* Install banner */
+  .install-banner { display: none; background: var(--surface); border-radius: var(--radius);
+    padding: 14px 16px; margin-bottom: var(--gap); align-items: center; gap: 12px;
+    border: 1px solid rgba(255,255,255,0.06); }
+  .install-banner .msg { flex: 1; font-size: 0.85em; }
+  .install-banner button { padding: 8px 16px; border-radius: 20px; border: none;
+    background: var(--blue); color: #fff; font-size: 0.8em; font-weight: 600; cursor: pointer; white-space: nowrap; }
+
+  @media (min-width: 768px) {
+    .app { max-width: 700px; }
+    .cards { grid-template-columns: repeat(3, 1fr); }
+    .gauge .speed-num { font-size: 5em; }
+  }
+
+  /* Daily stats card */
+  .daily-card { background: var(--surface); border-radius: var(--radius); padding: 16px;
+    margin-bottom: var(--gap); border: 1px solid rgba(255,255,255,0.04); }
+  .daily-header { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .daily-title { font-size: 0.72em; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; }
+  .daily-date { font-size: 0.72em; color: var(--text2); flex: 1; }
+  .daily-clear { font-size: 0.68em; color: var(--text3); cursor: pointer; background: none; border: none; }
+  .daily-clear:hover { color: var(--red); }
+  .daily-stats { display: flex; gap: 8px; margin-bottom: 14px; }
+  .daily-stats .stat { flex: 1; text-align: center; }
+  .daily-stats .stat .val { font-size: 1.15em; font-weight: 600;
+    font-family: 'JetBrains Mono','Consolas',monospace; }
+  .daily-stats .stat .lbl { font-size: 0.66em; color: var(--text3); margin-top: 3px; }
+  .seven-day-label { font-size: 0.66em; color: var(--text3); margin-bottom: 8px; letter-spacing: 1px; }
+  .seven-day { display: flex; align-items: flex-end; gap: 6px; height: 56px; }
+  .seven-day .bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center;
+    gap: 4px; height: 100%; justify-content: flex-end; }
+  .seven-day .bar-fill { width: 100%; max-width: 32px; border-radius: 3px 3px 0 0;
+    min-height: 3px; transition: height 0.5s ease; }
+  .seven-day .bar-label { font-size: 0.6em; color: var(--text3); }
+</style>
+</head>
+<body>
+<div class="app safe-top safe-bottom" id="app">
+  <!-- Header -->
+  <div class="header">
+    <h1><span class="dot" id="onDot"></span>运气网络监控<span id="weatherIcon" style="margin-left:6px;font-size:0.85em;"></span></h1>
+    <div class="status-bar">
+      <span id="netType">--</span>
+      <span id="ispTag">--</span>
+    </div>
+  </div>
+
+  <!-- Weather search -->
+  <div class="weather-search">
+    <input type="text" id="cityInput" placeholder="搜索城市天气..." autocomplete="off">
+    <div class="city-list" id="cityList"></div>
+  </div>
+
+  <!-- Current weather bar -->
+  <div class="cur-weather" id="curWeather" style="display:none;">
+    <div class="cw-icon" id="cwIcon"></div>
+    <div class="cw-info">
+      <div class="cw-city" id="cwCity"></div>
+      <div class="cw-desc" id="cwDesc"></div>
+    </div>
+    <div class="cw-temp" id="cwTemp"></div>
+    <div class="cw-detail">
+      <div>💧 <span id="cwHumidity"></span></div>
+      <div>🌧 <span id="cwRain"></span></div>
+    </div>
+  </div>
+
+  <!-- 7-day forecast -->
+  <div class="fc-row" id="fcRow"></div>
+
+  <!-- Speed gauge -->
+  <div class="gauge">
+    <div class="speed-num" id="speedNum">--</div>
+    <div class="speed-label">下载速度</div>
+    <div class="divider"></div>
+  </div>
+  <div class="upload-row">
+    <span class="val" id="upSpeed">--</span> <span class="lbl">上传</span>
+  </div>
+
+  <!-- Speed rating -->
+  <div class="rating">
+    <span class="badge badge-unknown" id="rateBadge">等待测速</span>
+  </div>
+  <div class="meter">
+    <div class="track"><div class="fill" id="meterFill" style="width:0%;background:var(--text3)"></div></div>
+    <div class="marks"><span>0</span><span>512K</span><span>2M</span><span>10M</span><span>50M+</span></div>
+  </div>
+
+  <!-- Install banner -->
+  <div class="install-banner" id="installBanner">
+    <span class="msg">添加到主屏幕，随时随地测网速</span>
+    <button onclick="installApp()">安装</button>
+  </div>
+
+  <!-- Cards -->
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">延迟</div>
+      <div class="card-value" id="latVal">--</div>
+      <div class="card-sub">毫秒 · ms</div>
+    </div>
+    <div class="card">
+      <div class="card-label">抖动</div>
+      <div class="card-value" id="jitVal">--</div>
+      <div class="card-sub">延迟波动</div>
+    </div>
+    <div class="card">
+      <div class="card-label">DNS</div>
+      <div class="card-value" id="dnsVal">--</div>
+      <div class="card-sub">解析延迟</div>
+    </div>
+    <div class="card">
+      <div class="card-label">带宽</div>
+      <div class="card-value" id="bwVal">--</div>
+      <div class="card-sub" id="bwSub">理论值</div>
+    </div>
+    <div class="card full">
+      <div class="card-label">IP 地址 · 归属地</div>
+      <div class="card-value" id="ipVal" style="font-size:1.1em;">--</div>
+      <div class="card-sub" id="ipSub">获取中...</div>
+    </div>
+  </div>
+
+  <!-- Network comparison -->
+  <div class="card full" style="margin-bottom: var(--gap);">
+    <div class="card-label">网络评级对比</div>
+    <div class="compare">
+      <div class="row"><span class="tag" style="background:rgba(0,229,160,0.15);color:var(--green)">高速</span><span style="color:var(--text3);font-size:0.72em;">看电影 · 游戏 · 下载</span><span class="val-r">&gt;2 MB/s</span></div>
+      <div class="row"><span class="tag" style="background:rgba(240,192,64,0.15);color:var(--yellow)">中速</span><span style="color:var(--text3);font-size:0.72em;">看视频 · 视频会议</span><span class="val-r">100K-2M</span></div>
+      <div class="row"><span class="tag" style="background:rgba(240,128,64,0.15);color:var(--orange)">低速</span><span style="color:var(--text3);font-size:0.72em;">网页 · 聊天 · 邮件</span><span class="val-r">&lt;100 KB/s</span></div>
+      <div class="row current" id="levelRow" style="display:none;">
+        <span class="tag" id="levelTag">--</span>
+        <span style="font-size:0.78em;color:var(--text);" id="levelDesc">--</span>
+        <span class="val-r" style="color:var(--text);" id="levelVal">--</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart -->
+  <div class="chart-card">
+    <div class="chart-label">速度历史 · 最近 30 次</div>
+    <canvas id="chart"></canvas>
+  </div>
+
+  <!-- Daily Stats -->
+  <div class="daily-card">
+    <div class="daily-header">
+      <span class="daily-title">今日统计</span>
+      <span class="daily-date" id="dailyDate"></span>
+      <button class="daily-clear" onclick="resetHistory()">清除记录</button>
+    </div>
+    <div class="daily-stats">
+      <div class="stat"><div class="val" id="dailyAvg">--</div><div class="lbl">平均</div></div>
+      <div class="stat"><div class="val" id="dailyMin">--</div><div class="lbl">最低</div></div>
+      <div class="stat"><div class="val" id="dailyMax">--</div><div class="lbl">最高</div></div>
+      <div class="stat"><div class="val" id="dailyCount">--</div><div class="lbl">测速次数</div></div>
+    </div>
+    <div class="seven-day-label">近7天趋势</div>
+    <div class="seven-day" id="sevenDayBars"></div>
+  </div>
+
+  <!-- Actions -->
+  <div class="actions">
+    <button class="btn btn-primary" id="btnTest" onclick="runFullTest()">⚡ 立即测速</button>
+    <button class="btn btn-secondary" onclick="shareApp()">📤 分享</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// === DOM refs ===
+const $ = id => document.getElementById(id);
+const onDot = $('onDot'), netType = $('netType'), ispTag = $('ispTag');
+const speedNum = $('speedNum'), upSpeed = $('upSpeed');
+const latVal = $('latVal'), jitVal = $('jitVal'), dnsVal = $('dnsVal');
+const rateBadge = $('rateBadge'), meterFill = $('meterFill');
+const levelRow = $('levelRow'), levelTag = $('levelTag'), levelDesc = $('levelDesc'), levelVal = $('levelVal');
+const bwVal = $('bwVal'), bwSub = $('bwSub'), ipVal = $('ipVal'), ipSub = $('ipSub');
+const weatherIcon = $('weatherIcon');
+const cityInput = $('cityInput'), cityList = $('cityList'), curWeather = $('curWeather');
+const cwIcon = $('cwIcon'), cwCity = $('cwCity'), cwDesc = $('cwDesc');
+const cwTemp = $('cwTemp'), cwHumidity = $('cwHumidity'), cwRain = $('cwRain'), fcRow = $('fcRow');
+const dailyDate = $('dailyDate'), dailyAvg = $('dailyAvg'), dailyMin = $('dailyMin');
+const dailyMax = $('dailyMax'), dailyCount = $('dailyCount'), sevenDayBars = $('sevenDayBars');
+const chartCvs = $('chart'), btnTest = $('btnTest'), toast = $('toast');
+
+// === State ===
+const history = JSON.parse(localStorage.getItem('speedHistory') || '[]');
+let dailyRecords = JSON.parse(localStorage.getItem('dailyRecords') || '{}');
+let latSamples = [];
+let speedClass = '';
+
+// === Toast ===
+let toastTimer;
+function showToast(msg) {
+  toast.textContent = msg; toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 2000);
+}
+
+// === Speed color ===
+function speedColor(kbps) {
+  if (kbps >= 1024) return 'speed-fast';
+  if (kbps >= 100) return 'speed-mid';
+  return 'speed-slow';
+}
+
+// === Format ===
+function fmtSpeed(kbps) {
+  if (kbps >= 1024) return { v: (kbps / 1024).toFixed(1), u: 'MB/s' };
+  return { v: Math.round(kbps).toString(), u: 'KB/s' };
+}
+function fmtMs(ms) { return Math.round(ms) + ' ms'; }
+
+// === Online status ===
+function updateOnline() {
+  const online = navigator.onLine;
+  onDot.classList.toggle('offline', !online);
+  netType.textContent = online ? '在线' : '离线';
+}
+window.addEventListener('online', updateOnline);
+window.addEventListener('offline', updateOnline);
+
+// === Network info ===
+function updateNetInfo() {
+  const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (c) {
+    const types = { wifi: 'WiFi', cellular: '蜂窝', ethernet: '有线', bluetooth: '蓝牙', none: '无' };
+    netType.textContent = types[c.type] || c.type || '在线';
+    const effTypes = { 'slow-2g': '2G', '2g': '2G', '3g': '3G', '4g': '4G/5G' };
+    const et = effTypes[c.effectiveType] || c.effectiveType || '';
+    if (et) netType.textContent += ' · ' + et;
+    if (c.downlink) {
+      bwVal.textContent = c.downlink + ' Mbps';
+      bwSub.textContent = '理论带宽';
+    }
+  }
+  updateOnline();
+}
+updateNetInfo();
+if (navigator.connection) {
+  navigator.connection.addEventListener('change', updateNetInfo);
+}
+
+// === IP & ISP ===
+async function fetchIP() {
+  let d = null;
+  // Try ipapi.co with retry
+  for (let i = 0; i < 2; i++) {
+    try {
+      const r = await fetch('https://ipapi.co/json/', { signal: AbortSignal.timeout(10000) });
+      d = await r.json();
+      if (d.ip) break;
+    } catch { continue; }
+  }
+  if (d) {
+    ipVal.textContent = d.ip || '--';
+    const parts = [d.city, d.region, d.country_name].filter(Boolean);
+    const org = d.org || '';
+    ipSub.textContent = parts.join(', ') + (org ? ' · ' + org : '');
+    if (org) {
+      const short = org.split(' ').slice(0, 2).join(' ');
+      ispTag.textContent = short.length < 12 ? short : short.slice(0, 10) + '..';
+    }
+    const lat = d.latitude, lon = d.longitude;
+    const cityLabel = [d.city, d.region, d.country_name].filter(Boolean).join(' · ');
+    if (lat && lon) fetchWeather(lat, lon, cityLabel);
+    else tryGeoWeather();
+  } else {
+    ipSub.textContent = '获取失败';
+    tryGeoWeather();
+  }
+}
+fetchIP();
+
+// === Weather ===
+async function tryGeoWeather() {
+  if (!navigator.geolocation) { applyDefaultBg(); return; }
+  navigator.geolocation.getCurrentPosition(
+    pos => fetchWeather(pos.coords.latitude, pos.coords.longitude),
+    () => applyDefaultBg(),
+    { timeout: 8000, maximumAge: 600000 }
+  );
+}
+
+function applyDefaultBg() {
+  const h = new Date().getHours();
+  const isNight = h < 6 || h >= 19;
+  document.body.style.background = isNight
+    ? 'linear-gradient(180deg, #0d1028 0%, #151840 40%, #1d1560 100%)'
+    : 'linear-gradient(180deg, #152240 0%, #1e3a60 35%, #2a5a5a 100%)';
+  weatherIcon.textContent = (isNight ? '🌙' : '☀️') + ' 广州';
+  if (curWeather) {
+    curWeather.style.display = 'flex';
+    if (cwIcon) cwIcon.textContent = isNight ? '🌙' : '⛅';
+    if (cwCity) cwCity.textContent = '广州 · 广东';
+    if (cwDesc) cwDesc.textContent = '加载中...';
+    if (cwTemp) cwTemp.textContent = '--°C';
+    if (cwHumidity) cwHumidity.textContent = '--%';
+    if (cwRain) cwRain.textContent = '--%';
+  }
+  if (fcRow) fcRow.innerHTML = '';
+  // Try default city weather from wttr.in
+  if (!window._defaultFetchTried) {
+    window._defaultFetchTried = true;
+    fetchWeather(23.13, 113.26, '广州');
+  }
+}
+
+// Guard to prevent recursive fetchWeather→applyDefaultBg→fetchWeather loops
+let weatherFetchFailed = false;
+async function fetchWeather(lat, lon, cityName) {
+  try {
+    const url = 'https://wttr.in/' + lat + ',' + lon + '?format=j1';
+    const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    const d = await r.json();
+    const cc = d.current_condition && d.current_condition[0];
+    if (cc) {
+      weatherFetchFailed = false;
+      const astro = d.weather && d.weather[0] && d.weather[0].astronomy && d.weather[0].astronomy[0];
+      const isNight = astro ? isNightByAstro(astro) : (new Date().getHours() < 6 || new Date().getHours() >= 19);
+      applyWeatherBg(parseInt(cc.weatherCode), isNight, parseFloat(cc.temp_C));
+      renderWeatherUI(cc, d.weather, cityName || '');
+    } else {
+      if (!weatherFetchFailed) { weatherFetchFailed = true; applyDefaultBg(); }
+    }
+  } catch {
+    if (!weatherFetchFailed) { weatherFetchFailed = true; applyDefaultBg(); }
+  }
+}
+
+function isNightByAstro(astro) {
+  if (!astro) return new Date().getHours() < 6 || new Date().getHours() >= 19;
+  const now = new Date();
+  // Parse "05:42 AM" format
+  function parseTime(s) {
+    const parts = s.split(' ');
+    const t = parts[0].split(':');
+    let h = parseInt(t[0]), m = parseInt(t[1]);
+    if (parts[1] === 'PM' && h !== 12) h += 12;
+    if (parts[1] === 'AM' && h === 12) h = 0;
+    return h * 60 + m;
+  }
+  const sunrise = parseTime(astro.sunrise);
+  const sunset = parseTime(astro.sunset);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  return nowMin < sunrise || nowMin >= sunset;
+}
+
+function applyWeatherBg(code, isNight, temp) {
+  if (!document.body) return;
+  const gradients = {
+    clear: 'linear-gradient(180deg, #152845 0%, #2060a0 35%, #3a8050 100%)',
+    'clear-night': 'linear-gradient(180deg, #0d1130 0%, #141c50 40%, #1c1870 100%)',
+    cloudy: 'linear-gradient(180deg, #263040 0%, #3a4860 50%, #4e6078 100%)',
+    fog: 'linear-gradient(180deg, #2a2a36 0%, #3e3e4d 50%, #525260 100%)',
+    rain: 'linear-gradient(180deg, #1a2a3a 0%, #203850 50%, #284860 100%)',
+    snow: 'linear-gradient(180deg, #28343e 0%, #3e4d58 50%, #5a6a76 100%)',
+    storm: 'linear-gradient(180deg, #0e1020 0%, #181a38 50%, #221e50 100%)'
+  };
+  // WWO codes → bg class
+  let cls = '';
+  if (code === 113) cls = isNight ? 'clear-night' : 'clear';
+  else if (code === 116) cls = 'cloudy';
+  else if (code === 119 || code === 122) cls = 'cloudy';
+  else if (code === 143 || code === 248 || code === 260) cls = 'fog';
+  else if (code >= 176 && code <= 200) cls = 'rain';
+  else if (code >= 227 && code <= 230) cls = 'snow';
+  else if (code >= 263 && code <= 284) cls = 'rain';
+  else if (code >= 293 && code <= 320) cls = 'rain';
+  else if (code >= 323 && code <= 350) cls = 'snow';
+  else if (code >= 353 && code <= 377) cls = 'rain';
+  else if (code >= 386 && code <= 395) cls = 'storm';
+  else cls = 'cloudy';
+  document.body.style.background = gradients[cls] || gradients.cloudy;
+  const icons = { clear: '☀️', 'clear-night': '🌙', cloudy: '⛅', fog: '🌫️', rain: '🌧️', snow: '❄️', storm: '⛈️' };
+  weatherIcon.textContent = icons[cls] || '';
+  if (temp != null) weatherIcon.textContent += ' ' + Math.round(temp) + '°';
+}
+
+// === Weather search & forecast ===
+function getWeatherEmoji(code) {
+  // WWO weather codes
+  if (code === 113) return '☀️';
+  if (code === 116) return '🌤️';
+  if (code === 119 || code === 122) return '☁️';
+  if (code === 143 || code === 248 || code === 260) return '🌫️';
+  if (code >= 176 && code <= 200) return '🌦️';
+  if (code >= 227 && code <= 230) return '🌨️';
+  if (code >= 263 && code <= 284) return '🌧️';
+  if (code >= 293 && code <= 320) return '🌧️';
+  if (code >= 323 && code <= 350) return '❄️';
+  if (code >= 353 && code <= 377) return '🌨️';
+  if (code >= 386 && code <= 395) return '⛈️';
+  return '⛅';
+}
+
+function getWeatherDesc(code) {
+  if (code === 113) return '晴';
+  if (code === 116) return '少云';
+  if (code === 119) return '多云';
+  if (code === 122) return '阴';
+  if (code === 143) return '薄雾';
+  if (code === 176) return '局部阵雨';
+  if (code === 179) return '局部阵雪';
+  if (code === 182) return '局部雨夹雪';
+  if (code === 185) return '局部冻雨';
+  if (code === 200) return '局部雷暴';
+  if (code === 227) return '吹雪';
+  if (code === 230) return '暴风雪';
+  if (code === 248) return '雾';
+  if (code === 260) return '冻雾';
+  if (code >= 263 && code <= 266) return '小雨';
+  if (code >= 281 && code <= 284) return '冻雨';
+  if (code >= 293 && code <= 299) return '小雨';
+  if (code >= 302 && code <= 308) return '雨';
+  if (code >= 311 && code <= 314) return '冻雨';
+  if (code >= 317 && code <= 320) return '雨夹雪';
+  if (code >= 323 && code <= 338) return '雪';
+  if (code === 350) return '冰粒';
+  if (code >= 353 && code <= 359) return '阵雨';
+  if (code >= 362 && code <= 377) return '阵雪';
+  if (code >= 386 && code <= 389) return '雷阵雨';
+  if (code >= 392 && code <= 395) return '雷阵雪';
+  return '多云';
+}
+
+let searchTimer;
+if (cityInput) {
+  cityInput.addEventListener('input', function() {
+    clearTimeout(searchTimer);
+    const q = this.value.trim();
+    if (q.length < 2) { cityList.classList.remove('open'); return; }
+    searchTimer = setTimeout(() => searchCity(q), 400);
+  });
+  cityInput.addEventListener('focus', function() {
+    if (cityList.children.length > 0) cityList.classList.add('open');
+  });
+  cityInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const firstItem = cityList.querySelector('.city-item[data-lat]');
+      if (firstItem && cityList.classList.contains('open')) {
+        cityList.classList.remove('open');
+        cityInput.value = '';
+        selectCity(firstItem.dataset.lat, firstItem.dataset.lon, firstItem.dataset.name, firstItem.dataset.region);
+      } else {
+        // No suggestions — search directly with raw input
+        const q = cityInput.value.trim();
+        if (q.length >= 1) {
+          cityList.classList.remove('open');
+          searchCityAndSelectFirst(q);
+        }
+      }
+    } else if (e.key === 'Escape') {
+      cityList.classList.remove('open');
+      cityInput.blur();
+    }
+  });
+}
+document.addEventListener('click', function(e) {
+  if (cityList && !e.target.closest('.weather-search')) cityList.classList.remove('open');
+});
+
+// === Local city database (no API dependency — avoids GFW blocks) ===
+const cityDB = [
+  { n:'北京', r:'北京', lat:39.91, lon:116.40 },{ n:'上海', r:'上海', lat:31.23, lon:121.47 },
+  { n:'广州', r:'广东', lat:23.13, lon:113.26 },{ n:'深圳', r:'广东', lat:22.54, lon:114.06 },
+  { n:'杭州', r:'浙江', lat:30.27, lon:120.15 },{ n:'成都', r:'四川', lat:30.57, lon:104.07 },
+  { n:'重庆', r:'重庆', lat:29.56, lon:106.55 },{ n:'武汉', r:'湖北', lat:30.58, lon:114.30 },
+  { n:'南京', r:'江苏', lat:32.06, lon:118.80 },{ n:'天津', r:'天津', lat:39.13, lon:117.20 },
+  { n:'西安', r:'陕西', lat:34.27, lon:108.95 },{ n:'长沙', r:'湖南', lat:28.22, lon:112.94 },
+  { n:'郑州', r:'河南', lat:34.75, lon:113.63 },{ n:'济南', r:'山东', lat:36.67, lon:116.98 },
+  { n:'苏州', r:'江苏', lat:31.30, lon:120.62 },{ n:'青岛', r:'山东', lat:36.07, lon:120.38 },
+  { n:'大连', r:'辽宁', lat:38.91, lon:121.61 },{ n:'厦门', r:'福建', lat:24.48, lon:118.08 },
+  { n:'福州', r:'福建', lat:26.07, lon:119.30 },{ n:'合肥', r:'安徽', lat:31.82, lon:117.23 },
+  { n:'昆明', r:'云南', lat:25.04, lon:102.68 },{ n:'贵阳', r:'贵州', lat:26.65, lon:106.63 },
+  { n:'南宁', r:'广西', lat:22.82, lon:108.37 },{ n:'哈尔滨', r:'黑龙江', lat:45.75, lon:126.63 },
+  { n:'长春', r:'吉林', lat:43.88, lon:125.32 },{ n:'沈阳', r:'辽宁', lat:41.80, lon:123.43 },
+  { n:'石家庄', r:'河北', lat:38.04, lon:114.48 },{ n:'太原', r:'山西', lat:37.87, lon:112.55 },
+  { n:'兰州', r:'甘肃', lat:36.06, lon:103.80 },{ n:'海口', r:'海南', lat:20.02, lon:110.35 },
+  { n:'珠海', r:'广东', lat:22.27, lon:113.58 },{ n:'东莞', r:'广东', lat:23.05, lon:113.75 },
+  { n:'佛山', r:'广东', lat:23.02, lon:113.12 },{ n:'惠州', r:'广东', lat:23.11, lon:114.41 },
+  { n:'中山', r:'广东', lat:22.52, lon:113.38 },{ n:'江门', r:'广东', lat:22.58, lon:113.08 },
+  { n:'湛江', r:'广东', lat:21.27, lon:110.36 },{ n:'肇庆', r:'广东', lat:23.05, lon:112.46 },
+  { n:'汕头', r:'广东', lat:23.35, lon:116.68 },{ n:'潮州', r:'广东', lat:23.66, lon:116.62 },
+  { n:'揭阳', r:'广东', lat:23.55, lon:116.37 },{ n:'茂名', r:'广东', lat:21.66, lon:110.92 },
+  { n:'韶关', r:'广东', lat:24.80, lon:113.59 },{ n:'阳江', r:'广东', lat:21.86, lon:111.98 },
+  { n:'宁波', r:'浙江', lat:29.86, lon:121.54 },{ n:'温州', r:'浙江', lat:28.00, lon:120.70 },
+  { n:'绍兴', r:'浙江', lat:30.00, lon:120.58 },{ n:'嘉兴', r:'浙江', lat:30.76, lon:120.75 },
+  { n:'无锡', r:'江苏', lat:31.57, lon:120.29 },{ n:'常州', r:'江苏', lat:31.81, lon:119.97 },
+  { n:'南通', r:'江苏', lat:31.98, lon:120.89 },{ n:'徐州', r:'江苏', lat:34.20, lon:117.28 },
+  { n:'扬州', r:'江苏', lat:32.39, lon:119.41 },{ n:'拉萨', r:'西藏', lat:29.65, lon:91.13 },
+  { n:'乌鲁木齐', r:'新疆', lat:43.82, lon:87.61 },{ n:'银川', r:'宁夏', lat:38.47, lon:106.27 },
+  { n:'西宁', r:'青海', lat:36.62, lon:101.78 },{ n:'南昌', r:'江西', lat:28.68, lon:115.86 },
+  { n:'三亚', r:'海南', lat:18.25, lon:109.51 },{ n:'桂林', r:'广西', lat:25.28, lon:110.28 },
+  { n:'洛阳', r:'河南', lat:34.61, lon:112.45 },{ n:'开封', r:'河南', lat:34.79, lon:114.31 },
+  { n:'秦皇岛', r:'河北', lat:39.94, lon:119.59 },{ n:'烟台', r:'山东', lat:37.53, lon:121.39 },
+  { n:'威海', r:'山东', lat:37.51, lon:122.12 },{ n:'宜昌', r:'湖北', lat:30.69, lon:111.29 },
+  { n:'襄阳', r:'湖北', lat:32.01, lon:112.12 },{ n:'株洲', r:'湖南', lat:27.83, lon:113.13 },
+  { n:'岳阳', r:'湖南', lat:29.37, lon:113.09 },{ n:'九江', r:'江西', lat:29.70, lon:116.00 },
+  { n:'芜湖', r:'安徽', lat:31.35, lon:118.43 },{ n:'泉州', r:'福建', lat:24.90, lon:118.58 },
+  { n:'漳州', r:'福建', lat:24.51, lon:117.65 },{ n:'北海', r:'广西', lat:21.48, lon:109.12 },
+  { n:'包头', r:'内蒙古', lat:40.65, lon:109.84 },{ n:'呼和浩特', r:'内蒙古', lat:40.82, lon:111.75 },
+  { n:'丽江', r:'云南', lat:26.87, lon:100.22 },{ n:'大理', r:'云南', lat:25.61, lon:100.27 },
+  { n:'延边', r:'吉林', lat:42.90, lon:129.51 },{ n:'香港', r:'香港', lat:22.32, lon:114.17 },
+  { n:'澳门', r:'澳门', lat:22.20, lon:113.55 },{ n:'台北', r:'台湾', lat:25.03, lon:121.57 },
+  { n:'高雄', r:'台湾', lat:22.62, lon:120.31 },{ n:'台中', r:'台湾', lat:24.14, lon:120.68 },
+];
+function matchCities(q) {
+  const lower = q.toLowerCase();
+  return cityDB.filter(c => c.n.includes(q) || c.n.toLowerCase().includes(lower) || c.r.includes(q))
+    .slice(0, 5);
+}
+function searchCity(q) {
+  const matches = matchCities(q);
+  if (matches.length) {
+    cityList.innerHTML = matches.map(c =>
+      '<div class="city-item" data-lat="' + c.lat + '" data-lon="' + c.lon +
+      '" data-name="' + c.n + '" data-region="' + c.r + '">' +
+      c.n + '<span class="region">' + c.r + '</span></div>'
+    ).join('');
+    cityList.querySelectorAll('.city-item').forEach(el => {
+      el.addEventListener('click', function() {
+        cityList.classList.remove('open');
+        cityInput.value = '';
+        selectCity(this.dataset.lat, this.dataset.lon, this.dataset.name, this.dataset.region);
+      });
+    });
+    cityList.classList.add('open');
+  } else {
+    cityList.innerHTML = '<div class="city-item" style="color:var(--text3)">未找到城市</div>';
+    cityList.classList.add('open');
+  }
+}
+function searchCityAndSelectFirst(q) {
+  const matches = matchCities(q);
+  if (matches.length) {
+    const c = matches[0];
+    selectCity(c.lat, c.lon, c.n, c.r);
+  } else {
+    showToast('未找到城市');
+  }
+}
+
+async function selectCity(lat, lon, name, region) {
+  try {
+    const url = 'https://wttr.in/' + lat + ',' + lon + '?format=j1';
+    const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    const d = await r.json();
+    const cc = d.current_condition && d.current_condition[0];
+    if (cc) {
+      const astro = d.weather && d.weather[0] && d.weather[0].astronomy && d.weather[0].astronomy[0];
+      const isNight = astro ? isNightByAstro(astro) : (new Date().getHours() < 6 || new Date().getHours() >= 19);
+      applyWeatherBg(parseInt(cc.weatherCode), isNight, parseFloat(cc.temp_C));
+      renderWeatherUI(cc, d.weather, name + (region ? ' · ' + region : ''));
+    }
+  } catch { showToast('天气获取失败'); }
+}
+
+function renderWeatherUI(current, dailyForecast, cityLabel) {
+  if (!curWeather) return;
+  const code = parseInt(current.weatherCode) || 0;
+  curWeather.style.display = 'flex';
+  if (cwIcon) cwIcon.textContent = getWeatherEmoji(code);
+  if (cwCity) cwCity.textContent = cityLabel || '当前位置';
+  if (cwDesc) cwDesc.textContent = getWeatherDesc(code);
+  if (cwTemp) cwTemp.textContent = Math.round(parseFloat(current.temp_C) || 0) + '°C';
+  if (cwHumidity) cwHumidity.textContent = '湿度 ' + (current.humidity || '--') + '%';
+  // Get today's max rain chance from hourly data
+  if (dailyForecast && dailyForecast.length && dailyForecast[0].hourly) {
+    const todayHours = dailyForecast[0].hourly;
+    let maxRain = 0;
+    todayHours.forEach(h => { const r = parseInt(h.chanceofrain) || 0; if (r > maxRain) maxRain = r; });
+    if (cwRain) cwRain.textContent = '降雨 ' + maxRain + '%';
+  } else if (cwRain) {
+    cwRain.textContent = '';
+  }
+  renderForecast(dailyForecast);
+}
+
+function renderForecast(dailyForecast) {
+  if (!fcRow) return;
+  if (!dailyForecast || !dailyForecast.length) { fcRow.innerHTML = ''; return; }
+  const dowLabels = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  fcRow.innerHTML = dailyForecast.map((day, i) => {
+    const d = new Date(day.date + 'T00:00:00');
+    const dow = i === 0 ? '今天' : (i === 1 ? '明天' : dowLabels[d.getDay()]);
+    // Pick noon-ish hour for daytime weather icon (index 4 = 12:00, or fallback to middle)
+    const midIdx = Math.min(4, day.hourly.length - 1);
+    const code = day.hourly[midIdx] ? parseInt(day.hourly[midIdx].weatherCode) || 0 : 113;
+    const hi = day.maxtempC ? Math.round(parseFloat(day.maxtempC)) : '--';
+    const lo = day.mintempC ? Math.round(parseFloat(day.mintempC)) : '--';
+    // Max rain chance from all hours
+    let maxRain = 0;
+    day.hourly.forEach(h => { const r = parseInt(h.chanceofrain) || 0; if (r > maxRain) maxRain = r; });
+    return '<div class="fc-day">' +
+      '<div class="fc-dow">' + dow + '</div>' +
+      '<div class="fc-emoji">' + getWeatherEmoji(code) + '</div>' +
+      '<div class="fc-temp">' + hi + '<span class="lo">/' + lo + '°</span></div>' +
+      (maxRain > 0 ? '<div class="fc-rain">💧' + maxRain + '%</div>' : '') +
+      '</div>';
+  }).join('');
+}
+
+// === Latency test ===
+async function pingHost(url) {
+  const t0 = performance.now();
+  try {
+    await fetch(url, { method: 'HEAD', mode: 'no-cors', signal: AbortSignal.timeout(5000) });
+    return performance.now() - t0;
+  } catch { return -1; }
+}
+
+async function measureLatency() {
+  const hosts = [
+    'https://cdn.bootcdn.net/ajax/libs/jquery/3.6.0/jquery.min.js',
+    'https://www.baidu.com/favicon.ico',
+    'https://dns.alidns.com/',
+  ];
+  const results = (await Promise.all(hosts.map(pingHost))).filter(t => t > 0);
+  if (results.length === 0) return;
+  const avg = results.reduce((a, b) => a + b, 0) / results.length;
+  const min = Math.min(...results);
+  latSamples.push(avg);
+  if (latSamples.length > 50) latSamples.shift();
+  latVal.textContent = fmtMs(avg);
+  // Jitter = std deviation
+  if (latSamples.length > 2) {
+    const mean = latSamples.reduce((a, b) => a + b, 0) / latSamples.length;
+    const sqDiff = latSamples.map(v => (v - mean) ** 2);
+    const std = Math.sqrt(sqDiff.reduce((a, b) => a + b, 0) / sqDiff.length);
+    jitVal.textContent = fmtMs(std);
+  }
+  // DNS
+  const dnsT = await pingHost('https://223.5.5.5/');
+  if (dnsT > 0) dnsVal.textContent = fmtMs(dnsT);
+}
+
+// === Download speed test ===
+async function testDownload() {
+  const url = 'https://cdn.bootcdn.net/ajax/libs/echarts/5.4.3/echarts.min.js?_=' + Date.now();
+  const t0 = performance.now();
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    const data = await r.arrayBuffer();
+    const duration = (performance.now() - t0) / 1000;
+    const sizeKB = data.byteLength / 1024;
+    return sizeKB / duration; // KB/s
+  } catch { return -1; }
+}
+
+// === Upload speed test ===
+async function testUpload() {
+  const payload = new Uint8Array(20 * 1024); // 20KB
+  const t0 = performance.now();
+  try {
+    await fetch('https://httpbin.org/post', {
+      method: 'POST', body: payload,
+      signal: AbortSignal.timeout(10000),
+    });
+    const duration = (performance.now() - t0) / 1000;
+    return 20 / duration; // KB/s
+  } catch { return -1; }
+}
+
+// === Speed rating ===
+function rateNetwork(dlKbps, latMs) {
+  // Classify: fast >2MB/s, mid 100KB-2MB, slow <100KB/s
+  let level, badgeCls, fillClr, fillPct;
+  if (dlKbps >= 2048) {
+    level = '高速'; badgeCls = 'badge-fast'; fillClr = 'var(--green)';
+    fillPct = Math.min(100, 50 + (dlKbps / 1024 / 50) * 50);
+  } else if (dlKbps >= 100) {
+    level = '中速'; badgeCls = 'badge-mid'; fillClr = 'var(--yellow)';
+    fillPct = 15 + ((dlKbps - 100) / 1948) * 35;
+  } else if (dlKbps > 0) {
+    level = '低速'; badgeCls = 'badge-slow'; fillClr = 'var(--orange)';
+    fillPct = Math.max(2, (dlKbps / 100) * 15);
+  } else {
+    level = ''; badgeCls = 'badge-unknown'; fillClr = 'var(--text3)'; fillPct = 0;
+  }
+
+  // Badge
+  rateBadge.textContent = level + '网络';
+  rateBadge.className = 'badge ' + badgeCls;
+  // Meter
+  meterFill.style.width = fillPct + '%';
+  meterFill.style.background = fillClr;
+  // Comparison row
+  if (level) {
+    levelRow.style.display = 'flex';
+    levelTag.textContent = level;
+    const tagColors = { '高速': ['rgba(0,229,160,0.15)', '#00e5a0'], '中速': ['rgba(240,192,64,0.15)', '#f0c040'], '低速': ['rgba(240,128,64,0.15)', '#f08040'] };
+    levelTag.style.background = tagColors[level][0];
+    levelTag.style.color = tagColors[level][1];
+    const { v, u } = fmtSpeed(dlKbps);
+    levelVal.textContent = v + ' ' + u;
+    const latStr = latMs > 0 ? '，延迟 ' + Math.round(latMs) + 'ms' : '';
+    levelDesc.textContent = '当前网络' + latStr;
+  } else {
+    levelRow.style.display = 'none';
+  }
+}
+
+// === Update speed display ===
+function updateSpeed(kbps) {
+  const { v, u } = fmtSpeed(kbps);
+  const cls = speedColor(kbps);
+  speedNum.innerHTML = '<span class="speed-arrow">↓</span>' + v + '<span class="speed-unit"> ' + u + '</span>';
+  speedNum.className = 'speed-num ' + cls;
+  speedClass = cls;
+}
+
+// === History & Chart ===
+function addHistory(kbps) {
+  history.push({ t: Date.now(), v: Math.round(kbps) });
+  if (history.length > 30) history.shift();
+  localStorage.setItem('speedHistory', JSON.stringify(history));
+  drawChart();
+}
+function resetHistory() {
+  history.length = 0; dailyRecords = {};
+  localStorage.removeItem('speedHistory');
+  localStorage.removeItem('dailyRecords');
+  drawChart(); renderDailyStats(); showToast('历史已清除');
+}
+
+// === Daily Records ===
+function getToday() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
+function updateDailyRecord(kbps) {
+  const today = getToday();
+  if (!dailyRecords[today]) {
+    dailyRecords[today] = { min: kbps, max: kbps, total: kbps, count: 1 };
+  } else {
+    const r = dailyRecords[today];
+    r.min = Math.min(r.min, kbps);
+    r.max = Math.max(r.max, kbps);
+    r.total += kbps;
+    r.count++;
+  }
+  const keys = Object.keys(dailyRecords).sort();
+  while (keys.length > 30) { delete dailyRecords[keys.shift()]; }
+  localStorage.setItem('dailyRecords', JSON.stringify(dailyRecords));
+  renderDailyStats();
+}
+
+function get7DayData() {
+  const result = [];
+  const now = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    const rec = dailyRecords[key];
+    result.push({
+      date: key, label: ['日','一','二','三','四','五','六'][d.getDay()],
+      avg: rec ? Math.round(rec.total / rec.count) : 0
+    });
+  }
+  return result;
+}
+
+function renderDailyStats() {
+  const today = getToday();
+  const rec = dailyRecords[today];
+  dailyDate.textContent = today;
+  if (rec) {
+    const avg = Math.round(rec.total / rec.count);
+    const a = fmtSpeed(avg), mn = fmtSpeed(rec.min), mx = fmtSpeed(rec.max);
+    dailyAvg.textContent = a.v + ' ' + a.u;
+    dailyMin.textContent = mn.v + ' ' + mn.u;
+    dailyMax.textContent = mx.v + ' ' + mx.u;
+    dailyCount.textContent = rec.count + '次';
+  } else {
+    dailyAvg.textContent = '--'; dailyMin.textContent = '--';
+    dailyMax.textContent = '--'; dailyCount.textContent = '0次';
+  }
+  render7Day();
+}
+
+function render7Day() {
+  const data = get7DayData();
+  const maxVal = Math.max(...data.map(d => d.avg), 1);
+  sevenDayBars.innerHTML = data.map(d => {
+    const h = Math.max(4, (d.avg / maxVal) * 52);
+    const color = d.avg > 0 ? 'var(--blue)' : 'var(--surface2)';
+    return '<div class="bar-wrap"><div class="bar-fill" style="height:' + h + 'px;background:' + color + ';"></div><div class="bar-label">' + d.label + '</div></div>';
+  }).join('');
+}
+
+function drawChart() {
+  const cvs = chartCvs, ctx = cvs.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = cvs.offsetWidth, H = cvs.offsetHeight;
+  cvs.width = W * dpr; cvs.height = H * dpr;
+  ctx.scale(dpr, dpr);
+
+  ctx.clearRect(0, 0, W, H);
+  // Grid
+  ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--surface2').trim() || '#1a1a36';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 4; i++) {
+    const y = (H / 4) * i;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  if (history.length < 2) {
+    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text3').trim() || '#5a5a7a';
+    ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('等待数据...', W / 2, H / 2 + 5);
+    return;
+  }
+
+  const values = history.map(h => h.v);
+  const maxV = Math.max(...values, 10);
+  const minV = Math.min(...values, 0);
+  const range = maxV - minV || 1;
+  const px = (i) => (i / (values.length - 1)) * W;
+  const py = (v) => H - ((v - minV) / range) * (H - 16) - 8;
+
+  // Gradient fill
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'rgba(0, 229, 160, 0.15)');
+  grad.addColorStop(1, 'rgba(0, 229, 160, 0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  for (let i = 0; i < values.length; i++) ctx.lineTo(px(i), py(values[i]));
+  ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+
+  // Line
+  ctx.strokeStyle = '#00e5a0';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  for (let i = 0; i < values.length; i++) {
+    const x = px(i), y = py(values[i]);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Dots at each point
+  ctx.fillStyle = '#00e5a0';
+  for (let i = 0; i < values.length; i++) {
+    ctx.beginPath(); ctx.arc(px(i), py(values[i]), 2.5, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+// === Share ===
+async function shareApp() {
+  const url = window.location.href;
+  const text = '来测测你的网速吧！ ' + url;
+  if (navigator.share) {
+    try { await navigator.share({ title: '网络监控', text: text, url: url }); }
+    catch (e) { if (e.name !== 'AbortError') copyLink(text); }
+  } else { copyLink(text); }
+}
+async function copyLink(text) {
+  try { await navigator.clipboard.writeText(text); showToast('链接已复制，发给朋友吧！'); }
+  catch { showToast('分享链接：' + window.location.href); }
+}
+
+// === Auto test ===
+let testing = false;
+async function autoTest() {
+  if (testing) return;
+  testing = true;
+  btnTest.textContent = '测速中...'; btnTest.disabled = true;
+  try {
+    await measureLatency();
+    const dl = await testDownload();
+    if (dl > 0) { updateSpeed(dl); addHistory(dl); updateDailyRecord(dl); rateNetwork(dl, latSamples[latSamples.length-1] || 0); }
+    const ul = await testUpload();
+    if (ul > 0) { const uf = fmtSpeed(ul); upSpeed.textContent = '↑ ' + uf.v + ' ' + uf.u; }
+  } catch (e) { /* ignore */ }
+  testing = false;
+  btnTest.textContent = '⚡ 立即测速'; btnTest.disabled = false;
+}
+
+async function runFullTest() {
+  showToast('正在测速...');
+  await autoTest();
+  showToast('测速完成');
+}
+
+// === Visibility ===
+let autoTimer;
+function startAuto() {
+  clearInterval(autoTimer);
+  autoTimer = setInterval(() => { if (!testing && !document.hidden) autoTest(); }, 4000);
+}
+function stopAuto() { clearInterval(autoTimer); }
+document.addEventListener('visibilitychange', () => document.hidden ? stopAuto() : startAuto());
+
+// === PWA Install ===
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); installPrompt = e;
+  $('installBanner').style.display = 'flex';
+});
+function installApp() {
+  if (!installPrompt) { showToast('请使用浏览器菜单安装'); return; }
+  installPrompt.prompt();
+  installPrompt.userChoice.then(r => {
+    $('installBanner').style.display = 'none';
+    showToast(r.outcome === 'accepted' ? '安装成功！' : '已取消');
+    installPrompt = null;
+  });
+}
+
+// === Resize chart ===
+window.addEventListener('resize', drawChart);
+
+// === Init ===
+updateOnline();
+drawChart();
+renderDailyStats();
+autoTest();
+startAuto();
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    reg.addEventListener('updatefound', () => {
+      const newSW = reg.installing;
+      newSW.addEventListener('statechange', () => {
+        if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+          newSW.postMessage('skipWaiting');
+          showToast('新版本已就绪，刷新后生效');
+          setTimeout(() => location.reload(), 1500);
+        }
+      });
+    });
+  });
+  // Detect controller change (skipWaiting took effect)
+  navigator.serviceWorker.addEventListener('controllerchange', () => location.reload());
+}
+
+if (history.length > 0) {
+  const last = history[history.length - 1].v;
+  updateSpeed(last);
+  rateNetwork(last, 0);
+  drawChart();
+}
+</script>
+</body>
+</html>
