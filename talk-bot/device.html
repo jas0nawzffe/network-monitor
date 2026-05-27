@@ -202,73 +202,86 @@ function b64Decode(str) {
   } catch(e) { return atob(str); }
 }
 
+// Helper: fetch with timeout, works on older Safari
+function fetchWithTimeout(url, opts, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(function() { ctrl.abort(); }, ms);
+  return fetch(url, Object.assign({}, opts, { signal: ctrl.signal })).finally(function () {
+    clearTimeout(timer);
+  });
+}
+
+function schedulePoll() {
+  setTimeout(pollMessages, 3000);
+}
+
 async function pollMessages() {
+  var hadError = false;
   try {
     // 1. List message files
-    const listR = await fetch(MSG_DIR, {
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' },
-      signal: AbortSignal.timeout(12000)
-    });
-    if (!listR.ok) { setOffline('list:' + listR.status); return; }
-    const files = await listR.json();
-    if (!Array.isArray(files)) { setOffline('格式错误'); return; }
-
-    // 2. Filter: our channel + new (not seen)
-    const newFiles = files.filter(f => {
-      if (!f.name.startsWith('msg-')) return false;
-      if (seenIds.has(f.name)) return false;
-      return true;
-    });
-    if (newFiles.length === 0) { setOnline(); return; }
-
-    // 3. Read new messages
-    for (const f of newFiles) {
-      try {
-        const fileR = await fetch(f.url, {
-          headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' },
-          signal: AbortSignal.timeout(10000)
+    var listR = await fetchWithTimeout(MSG_DIR, {
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
+    }, 12000);
+    if (!listR.ok) { setOffline('list:' + listR.status); hadError = true; }
+    else {
+      var files = await listR.json();
+      if (!Array.isArray(files)) { setOffline('格式错误'); hadError = true; }
+      else {
+        // 2. Filter: our channel + new (not seen)
+        var newFiles = files.filter(function(f) {
+          if (!f.name.startsWith('msg-')) return false;
+          if (seenIds.has(f.name)) return false;
+          return true;
         });
-        if (!fileR.ok) continue;
-        const fileData = await fileR.json();
-        const msg = JSON.parse(b64Decode(fileData.content));
-        seenIds.add(f.name);
-        if (msg.ch !== CHANNEL) continue;
+        if (newFiles.length > 0) {
+          // 3. Read new messages
+          for (var i = 0; i < newFiles.length; i++) {
+            var f = newFiles[i];
+            try {
+              var fileR = await fetchWithTimeout(f.url, {
+                headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
+              }, 10000);
+              if (!fileR.ok) continue;
+              var fileData = await fileR.json();
+              var msg = JSON.parse(b64Decode(fileData.content));
+              seenIds.add(f.name);
+              if (msg.ch !== CHANNEL) continue;
 
-        const emotion = detectEmotion(msg.text);
-        setEmotion(emotion);
-        showMessage(msg.text, msg.sender);
-        if (msg.speak !== false) {
-          const prefix = msg.sender ? msg.sender + '说：' : '';
-          speak(prefix + msg.text);
+              var emotion = detectEmotion(msg.text);
+              setEmotion(emotion);
+              showMessage(msg.text, msg.sender);
+              if (msg.speak !== false) {
+                var prefix = msg.sender ? msg.sender + '说：' : '';
+                speak(prefix + msg.text);
+              }
+            } catch (e) { /* skip bad files */ }
+          }
+
+          // 4. Cleanup: keep only last 50 files
+          if (files.length > 50) {
+            var toDelete = files.slice(0, files.length - 50);
+            for (var j = 0; j < toDelete.length; j++) {
+              var fd = toDelete[j];
+              fetch('https://api.github.com/repos/jas0nawzffe/network-monitor/contents/' + fd.path, {
+                method: 'DELETE',
+                headers: {
+                  'Authorization': 'Bearer ' + TOKEN,
+                  'Accept': 'application/vnd.github+json',
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ message: 'cleanup old msg', sha: fd.sha })
+              }).catch(function(){});
+              seenIds.delete(fd.name);
+            }
+          }
         }
-      } catch (e) { /* skip bad files */ }
-    }
-
-    // 4. Cleanup: keep only last 50 files (delete old ones via API)
-    if (files.length > 50) {
-      const toDelete = files.slice(0, files.length - 50);
-      for (const f of toDelete) {
-        fetch('https://api.github.com/repos/jas0nawzffe/network-monitor/contents/' + f.path, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': 'Bearer ' + TOKEN,
-            'Accept': 'application/vnd.github+json',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            message: 'cleanup old msg',
-            sha: f.sha
-          })
-        }).catch(() => {});
-        seenIds.delete(f.name);
+        if (!hadError) setOnline();
       }
     }
-
-    setOnline();
   } catch (e) {
     setOffline('网络错误');
   }
-  setTimeout(pollMessages, 3000);
+  schedulePoll();
 }
 
 function setOnline() {
