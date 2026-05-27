@@ -113,7 +113,7 @@
 <body>
 <div class="header">
   <h1>📡 小运控制台</h1>
-  <div class="device-status"><span class="dot" id="statusDot"></span><span id="statusText">离线</span></div>
+  <div class="device-status"><span class="dot" id="statusDot"></span><span id="statusText">连接中...</span></div>
 </div>
 <div class="sender-row">发送者：<input id="senderName" type="text" placeholder="你的昵称" maxlength="10"></div>
 <div class="history" id="history"><div class="empty-state">💬 在这里发消息<br>家里的装置会说出来</div></div>
@@ -125,15 +125,16 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
 <script>
-// === Config ===
-const MQTT_HOST = 'broker-cn.emqx.io';
-const MQTT_PORT = 8084;
-const TOPIC = 'yunqi/talkbot/msg';
-const CLIENT_ID = 'yunqi-ctrl-' + Math.random().toString(36).slice(2, 8);
+// ============================================================
+// CONTROL PANEL — jsonblob.com HTTP relay
+// ============================================================
 
-// === DOM ===
+const CHANNEL = 'yunqi-talkbot-' + (new URLSearchParams(location.search).get('ch') || 'home');
+const API_BASE = 'https://jsonblob.com/api/jsonBlob';
+let blobId = localStorage.getItem('tb-blob-' + CHANNEL);
+
+// DOM
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
 const historyEl = document.getElementById('history');
@@ -144,7 +145,7 @@ const quickMsgs = document.getElementById('quickMsgs');
 const senderName = document.getElementById('senderName');
 const toast = document.getElementById('toast');
 
-// === Quick messages ===
+// Quick messages
 const quickMessages = [
   '加油！你最棒了！',
   '吃饭了吗？🍚',
@@ -168,7 +169,7 @@ quickMsgs.addEventListener('click', e => {
   }
 });
 
-// === Message history ===
+// Message history
 let msgHistory = [];
 const MAX_HISTORY = 50;
 
@@ -194,7 +195,7 @@ function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// === Toast ===
+// Toast
 let toastTimer;
 function showToast(msg) {
   toast.textContent = msg;
@@ -203,52 +204,70 @@ function showToast(msg) {
   toastTimer = setTimeout(() => toast.classList.remove('show'), 2000);
 }
 
-// === MQTT ===
-let client = null;
+// ============================================================
+// JSON Blob relay
+// ============================================================
 
-function connectMQTT() {
-  const c = new Paho.MQTT.Client(MQTT_HOST, MQTT_PORT, '/mqtt', CLIENT_ID);
-  c.onConnectionLost = () => {
-    updateDeviceStatus(false);
-    setTimeout(connectMQTT, 5000);
-  };
-  c.onMessageArrived = () => {}; // Controller doesn't listen for messages
-
-  c.connect({
-    onSuccess: () => {
-      updateDeviceStatus(true);
-      // Subscribe to know device is online (optional: presence topic)
-    },
-    onFailure: () => {
-      updateDeviceStatus(false);
-      setTimeout(connectMQTT, 5000);
-    },
-    useSSL: true,
-    keepAliveInterval: 30,
-    reconnect: true,
+async function ensureBlob() {
+  if (blobId) return blobId;
+  const r = await fetch(API_BASE, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages: [] })
   });
-  client = c;
+  if (!r.ok) throw new Error('Cannot create blob');
+  const location = r.headers.get('Location');
+  blobId = location.split('/').pop();
+  localStorage.setItem('tb-blob-' + CHANNEL, blobId);
+  return blobId;
 }
 
-function updateDeviceStatus(online) {
-  statusDot.className = 'dot' + (online ? ' online' : '');
-  statusText.textContent = online ? '已连接' : '离线';
-}
-
-// === Send message ===
-function sendMessage(text) {
+async function sendMessage(text) {
   if (!text || !text.trim()) return;
   const sender = senderName.value.trim() || '';
-  if (!client || !client.isConnected()) {
-    showToast('未连接，请稍候...');
-    return;
+
+  try {
+    await ensureBlob();
+    // Read current blob, append message, write back
+    const r = await fetch(API_BASE + '/' + blobId, {
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!r.ok) {
+      if (r.status === 404 || r.status === 410) {
+        blobId = null;
+        localStorage.removeItem('tb-blob-' + CHANNEL);
+      }
+      showToast('发送失败，请重试');
+      return;
+    }
+    const data = await r.json();
+    const msgs = data.messages || [];
+    const newMsg = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      text: text.trim(),
+      sender,
+      ts: Date.now(),
+      speak: true
+    };
+    msgs.push(newMsg);
+    // Keep only last 20 messages to avoid blob getting too large
+    while (msgs.length > 20) msgs.shift();
+
+    const putR = await fetch(API_BASE + '/' + blobId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: msgs })
+    });
+    if (!putR.ok) {
+      showToast('发送失败，请重试');
+      return;
+    }
+    addToHistory(text.trim(), sender);
+    updateStatus(true);
+  } catch (e) {
+    showToast('网络错误，请重试');
+    updateStatus(false);
   }
-  const payload = JSON.stringify({ text: text.trim(), sender, ts: Date.now() });
-  const msg = new Paho.MQTT.Message(payload);
-  msg.destinationName = TOPIC;
-  msg.qos = 0;
-  client.send(msg);
-  addToHistory(text.trim(), sender);
 }
 
 sendBtn.addEventListener('click', () => {
@@ -264,7 +283,40 @@ msgInput.addEventListener('keydown', e => {
   }
 });
 
-// === Voice input ===
+// ============================================================
+// Polling (for device online status)
+// ============================================================
+let pollTimer;
+
+async function pollStatus() {
+  try {
+    if (!blobId) { updateStatus(false); return; }
+    const r = await fetch(API_BASE + '/' + blobId, {
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!r.ok) {
+      if (r.status === 404 || r.status === 410) {
+        blobId = null;
+        localStorage.removeItem('tb-blob-' + CHANNEL);
+      }
+      updateStatus(false);
+      return;
+    }
+    updateStatus(true);
+  } catch (e) {
+    updateStatus(false);
+  }
+  pollTimer = setTimeout(pollStatus, 5000);
+}
+
+function updateStatus(online) {
+  statusDot.className = 'dot' + (online ? ' online' : '');
+  statusText.textContent = online ? '已连接' : '离线';
+}
+
+// ============================================================
+// Voice input
+// ============================================================
 let recognition = null;
 let isListening = false;
 
@@ -308,11 +360,16 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
   micBtn.style.display = 'none';
 }
 
-// === Init ===
-connectMQTT();
-msgInput.focus();
-</script>
-<script>
+// ============================================================
+// Init
+// ============================================================
+function init() {
+  pollStatus();
+  msgInput.focus();
+}
+init();
+
+// Register SW
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
