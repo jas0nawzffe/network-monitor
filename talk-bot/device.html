@@ -223,15 +223,15 @@ async function pollMessages() {
 
     // 3. Read new messages
     for (const f of newFiles) {
-      seenIds.add(f.name);
       try {
-        const fileR = await fetch(f.url + '?ref=master', {
+        const fileR = await fetch(f.url, {
           headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' },
           signal: AbortSignal.timeout(10000)
         });
         if (!fileR.ok) continue;
         const fileData = await fileR.json();
         const msg = JSON.parse(b64Decode(fileData.content));
+        seenIds.add(f.name);
         if (msg.ch !== CHANNEL) continue;
 
         const emotion = detectEmotion(msg.text);
