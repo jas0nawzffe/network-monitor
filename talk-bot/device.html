@@ -94,12 +94,12 @@
 
 <script>
 // ============================================================
-// DEVICE — GitHub Content API polling
+// DEVICE — GitHub API, 每条消息独立文件，无冲突
 // ============================================================
 
 const CHANNEL = new URLSearchParams(location.search).get('ch') || 'home';
 const TOKEN = String.fromCharCode(103,104,112,95,51,65,67,101,119,77,55,87,81,105,79,102,107,113,69,106,97,70,108,49,71,54,53,52,51,105,57,79,82,68,50,67,49,52,56,73);
-const API = 'https://api.github.com/repos/jas0nawzffe/network-monitor/contents/talk-bot/messages.json';
+const MSG_DIR = 'https://api.github.com/repos/jas0nawzffe/network-monitor/contents/talk-bot/msgs?ref=master';
 
 document.getElementById('channelBadge').textContent = '#' + CHANNEL;
 
@@ -189,46 +189,81 @@ faceEl.addEventListener('click', () => {
 });
 
 // ============================================================
-// Poll via GitHub Content API (returns base64 content)
+// Poll: list msg files → read new ones
 // ============================================================
-let lastMsgId = '';
+let seenIds = new Set();
+let lastListTime = 0;
 
 function b64Decode(str) {
   try {
     return decodeURIComponent(atob(str).split('').map(c =>
       '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
     ).join(''));
-  } catch(e) {
-    return atob(str);
-  }
+  } catch(e) { return atob(str); }
 }
 
 async function pollMessages() {
   try {
-    const r = await fetch(API, {
+    // 1. List message files
+    const listR = await fetch(MSG_DIR, {
       headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' },
       signal: AbortSignal.timeout(12000)
     });
-    if (!r.ok) {
-      setOffline('API ' + r.status);
-      return;
-    }
-    const data = await r.json();
-    const content = JSON.parse(b64Decode(data.content));
-    const msgs = (content.messages || []).filter(m => m.ch === CHANNEL);
+    if (!listR.ok) { setOffline('list:' + listR.status); return; }
+    const files = await listR.json();
+    if (!Array.isArray(files)) { setOffline('格式错误'); return; }
 
-    for (const m of msgs) {
-      if (m.id && m.id !== lastMsgId) {
-        lastMsgId = m.id;
-        const emotion = detectEmotion(m.text);
+    // 2. Filter: our channel + new (not seen)
+    const newFiles = files.filter(f => {
+      if (!f.name.startsWith('msg-')) return false;
+      if (seenIds.has(f.name)) return false;
+      return true;
+    });
+    if (newFiles.length === 0) { setOnline(); return; }
+
+    // 3. Read new messages
+    for (const f of newFiles) {
+      seenIds.add(f.name);
+      try {
+        const fileR = await fetch(f.url + '?ref=master', {
+          headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' },
+          signal: AbortSignal.timeout(10000)
+        });
+        if (!fileR.ok) continue;
+        const fileData = await fileR.json();
+        const msg = JSON.parse(b64Decode(fileData.content));
+        if (msg.ch !== CHANNEL) continue;
+
+        const emotion = detectEmotion(msg.text);
         setEmotion(emotion);
-        showMessage(m.text, m.sender);
-        if (m.speak !== false) {
-          const prefix = m.sender ? m.sender + '说：' : '';
-          speak(prefix + m.text);
+        showMessage(msg.text, msg.sender);
+        if (msg.speak !== false) {
+          const prefix = msg.sender ? msg.sender + '说：' : '';
+          speak(prefix + msg.text);
         }
+      } catch (e) { /* skip bad files */ }
+    }
+
+    // 4. Cleanup: keep only last 50 files (delete old ones via API)
+    if (files.length > 50) {
+      const toDelete = files.slice(0, files.length - 50);
+      for (const f of toDelete) {
+        fetch('https://api.github.com/repos/jas0nawzffe/network-monitor/contents/' + f.path, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': 'Bearer ' + TOKEN,
+            'Accept': 'application/vnd.github+json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            message: 'cleanup old msg',
+            sha: f.sha
+          })
+        }).catch(() => {});
+        seenIds.delete(f.name);
       }
     }
+
     setOnline();
   } catch (e) {
     setOffline('网络错误');
@@ -246,7 +281,6 @@ function setOffline(reason) {
   statusText.textContent = '离线 · ' + (reason || '');
 }
 
-// Wake lock
 function requestWakeLock() {
   if ('wakeLock' in navigator) {
     navigator.wakeLock.request('screen').catch(() => {});
