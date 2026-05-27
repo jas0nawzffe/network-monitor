@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0a14">
+<title>小运 — 远程传话装置</title>
+<link rel="manifest" href="manifest.json">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #0a0a14; color: #e0e0f0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 24px; gap: 24px;
+  }
+  h1 { font-size: 2em; }
+  p { color: #888; line-height: 1.6; max-width: 360px; }
+  .cards { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+  .card {
+    display: block; width: 140px; padding: 24px 16px; border-radius: 18px;
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.06);
+    color: #ccc; text-decoration: none; transition: all 0.2s;
+  }
+  .card:active { background: rgba(255,255,255,0.1); }
+  .card .icon { font-size: 2.5em; display: block; margin-bottom: 10px; }
+  .card .label { font-size: 0.9em; font-weight: 600; }
+  .card .sub { font-size: 0.72em; color: #666; margin-top: 4px; }
+  .auto-detect { font-size: 0.8em; color: #555; margin-top: 16px; }
+</style>
+</head>
+<body>
+<h1>📡 小运</h1>
+<p>远程传话装置 — 你在外面发消息，家里的装置就念出来</p>
+<div class="cards">
+  <a class="card" href="control.html">
+    <span class="icon">📱</span>
+    <span class="label">发送消息</span>
+    <span class="sub">手机控制端</span>
+  </a>
+  <a class="card" href="device.html">
+    <span class="icon">🤖</span>
+    <span class="label">接收装置</span>
+    <span class="sub">iPad/平板端</span>
+  </a>
+</div>
+<p class="auto-detect">用 iPad 打开「接收装置」放在家里<br>用手机打开「发送消息」在外面随时传话</p>
+
+<script>
+// Auto-redirect based on screen size
+if (window.innerWidth >= 768 && window.innerWidth <= 1200) {
+  // iPad size — go to device
+  // location.replace('device.html');
+}
+</script>
+</body>
+</html>

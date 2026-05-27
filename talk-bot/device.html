@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0a14">
+<link rel="manifest" href="manifest.json">
+<title>小运 — 桌面陪伴装置</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #0a0a14; color: #e0e0f0;
+    -webkit-tap-highlight-color: transparent; user-select: none;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+
+  /* Background ambient */
+  .ambient {
+    position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background: radial-gradient(ellipse at center, #1a1a3e 0%, #0a0a14 70%);
+    transition: background 1.5s ease;
+  }
+  body.happy .ambient { background: radial-gradient(ellipse at center, #2a3050 0%, #0d1120 70%); }
+  body.love .ambient { background: radial-gradient(ellipse at center, #3a2030 0%, #0d1020 70%); }
+  body.think .ambient { background: radial-gradient(ellipse at center, #202840 0%, #0a0e1e 70%); }
+  body.night .ambient { background: radial-gradient(ellipse at center, #151530 0%, #080814 70%); }
+
+  /* Main face area */
+  .face-container { position: relative; z-index: 1; text-align: center; }
+  .face {
+    font-size: min(30vw, 200px);
+    transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+    filter: drop-shadow(0 0 40px rgba(100,120,255,0.3));
+    animation: breathe 4s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+  }
+  .face.bounce { animation: bounce 0.6s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  @keyframes bounce {
+    0% { transform: scale(1); }
+    30% { transform: scale(1.25); }
+    60% { transform: scale(0.9); }
+    100% { transform: scale(1); }
+  }
+  .face.spin { animation: spin 0.8s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  @keyframes spin {
+    0% { transform: scale(1) rotate(0deg); }
+    40% { transform: scale(1.2) rotate(20deg); }
+    70% { transform: scale(0.95) rotate(-10deg); }
+    100% { transform: scale(1) rotate(0deg); }
+  }
+
+  /* Message display */
+  .message {
+    position: relative; z-index: 1; margin-top: 20px;
+    font-size: clamp(20px, 4vw, 36px); font-weight: 600;
+    text-align: center; padding: 14px 24px;
+    border-radius: 18px; max-width: 85vw; min-height: 56px;
+    background: rgba(255,255,255,0.06); color: #e8e8f8;
+    transition: all 0.5s ease; line-height: 1.5; opacity: 0;
+  }
+  .message.show { opacity: 1; }
+
+  /* Sender name */
+  .sender {
+    position: relative; z-index: 1; margin-top: 4px;
+    font-size: 14px; color: #6a6a8a; opacity: 0; transition: opacity 0.5s;
+  }
+  .sender.show { opacity: 1; }
+
+  /* Status bar */
+  .status {
+    position: fixed; bottom: 24px; z-index: 2;
+    font-size: 12px; color: #4a4a6a; display: flex; align-items: center; gap: 6px;
+  }
+  .status .dot { width: 7px; height: 7px; border-radius: 50%; background: #888;
+    transition: background 0.3s; }
+  .status .dot.online { background: #00e5a0; box-shadow: 0 0 6px #00e5a0; }
+  .status .dot.offline { background: #e04040; }
+
+  /* Wake lock hint */
+  .wakelock-hint {
+    position: fixed; top: 16px; z-index: 2;
+    font-size: 12px; color: #4a4a6a; text-align: center; width: 100%;
+  }
+
+  /* Tap instruction */
+  .tap-hint {
+    position: fixed; bottom: 60px; z-index: 2;
+    font-size: 13px; color: #3a3a5a; text-align: center; width: 100%;
+    transition: opacity 0.5s;
+  }
+</style>
+</head>
+<body>
+<div class="ambient"></div>
+<div class="face-container">
+  <div class="face" id="face">😊</div>
+</div>
+<div class="message" id="message"></div>
+<div class="sender" id="sender"></div>
+<div class="tap-hint" id="tapHint">👆 戳戳我可以互动</div>
+<div class="status"><span class="dot" id="statusDot"></span><span id="statusText">连接中...</span></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+<script>
+// === MQTT Config ===
+const MQTT_HOST = 'broker-cn.emqx.io';
+const MQTT_PORT = 8084; // WSS
+const TOPIC = 'yunqi/talkbot/msg';
+const CLIENT_ID = 'yunqi-device-' + Math.random().toString(36).slice(2, 8);
+
+// === DOM ===
+const faceEl = document.getElementById('face');
+const msgEl = document.getElementById('message');
+const senderEl = document.getElementById('sender');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const tapHint = document.getElementById('tapHint');
+const body = document.body;
+
+// === Emotion system ===
+const emotions = {
+  default:  { face: '😊', mood: '' },
+  happy:    { face: '😄', mood: 'happy' },
+  love:     { face: '🥰', mood: 'love' },
+  praise:   { face: '🌟', mood: 'happy' },
+  surprise: { face: '😮', mood: '' },
+  think:    { face: '🤔', mood: 'think' },
+  sad:      { face: '🥺', mood: '' },
+  cool:     { face: '😎', mood: '' },
+  night:    { face: '🌙', mood: 'night' },
+  wink:     { face: '😉', mood: '' },
+  party:    { face: '🥳', mood: 'happy' },
+  heart:    { face: '💖', mood: 'love' },
+};
+
+const happyPhrases = ['你真棒', '加油', '厉害', '好棒', '了不起', '牛', 'nice', 'good', '赞', '优秀', '满分', '第一', 'winner', '冠军', '成功', '完美', '太强', '恭喜', '表扬', '进步'];
+const lovePhrases = ['爱你', '想你', 'love', '亲亲', '抱抱', 'mua', '宝贝', '乖', '晚安', '好梦', '亲一个', '心肝'];
+const sadPhrases = ['难过', '伤心', '委屈', '哭', '失败', '错了', '对不起', 'sad', 'sorry'];
+
+function detectEmotion(text) {
+  const t = text.toLowerCase();
+  for (const p of lovePhrases) if (t.includes(p)) return emotions.love;
+  for (const p of happyPhrases) if (t.includes(p)) return emotions.praise;
+  for (const p of sadPhrases) if (t.includes(p)) return emotions.sad;
+  // Check for questions
+  if (t.includes('?') || t.includes('？')) return emotions.think;
+  if (t.includes('!') || t.includes('！') || t.includes('哈哈') || t.includes('嘻嘻')) return emotions.happy;
+  // Time-based
+  const h = new Date().getHours();
+  if (h >= 22 || h < 6) return emotions.night;
+  return emotions.default;
+}
+
+function setEmotion(emotion) {
+  if (!emotion) emotion = emotions.default;
+  faceEl.textContent = emotion.face;
+  faceEl.classList.remove('bounce', 'spin');
+  void faceEl.offsetWidth; // reflow
+  if (emotion === emotions.praise || emotion === emotions.happy) faceEl.classList.add('bounce');
+  else if (emotion === emotions.surprise) faceEl.classList.add('spin');
+  // Update ambient
+  body.className = emotion.mood || '';
+}
+
+function showMessage(text, sender) {
+  msgEl.textContent = text;
+  msgEl.classList.add('show');
+  senderEl.textContent = sender ? '— ' + sender : '';
+  senderEl.classList.toggle('show', !!sender);
+  // Auto-hide after 8s
+  clearTimeout(msgEl._hideTimer);
+  msgEl._hideTimer = setTimeout(() => {
+    msgEl.classList.remove('show');
+    senderEl.classList.remove('show');
+    setEmotion(emotions.default);
+  }, 8000);
+}
+
+// === TTS ===
+function speak(text, rate) {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel(); // Stop any ongoing speech
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'zh-CN';
+  u.rate = rate || 1.1;
+  u.pitch = 1.1;
+  u.volume = 1;
+  // Try to pick a good Chinese voice
+  const voices = speechSynthesis.getVoices();
+  const zhVoice = voices.find(v => v.lang.startsWith('zh-CN') || v.lang.startsWith('zh-TW') || v.lang.startsWith('zh-HK'));
+  if (zhVoice) u.voice = zhVoice;
+  window.speechSynthesis.speak(u);
+}
+
+// === Tap interaction ===
+const tapFaces = ['😊','😄','😉','😎','🥰','🤗','😆','😋','🤩','😇'];
+faceEl.addEventListener('click', () => {
+  const randomFace = tapFaces[Math.floor(Math.random() * tapFaces.length)];
+  faceEl.textContent = randomFace;
+  faceEl.classList.remove('bounce');
+  void faceEl.offsetWidth;
+  faceEl.classList.add('bounce');
+  tapHint.style.opacity = '0';
+  setTimeout(() => setEmotion(emotions.default), 1500);
+});
+
+// === MQTT ===
+let client = null;
+
+function connectMQTT() {
+  const c = new Paho.MQTT.Client(MQTT_HOST, MQTT_PORT, '/mqtt', CLIENT_ID);
+  c.onConnectionLost = (res) => {
+    statusDot.className = 'dot offline';
+    statusText.textContent = '离线 · 重连中';
+    setEmotion(emotions.think);
+    setTimeout(connectMQTT, 5000);
+  };
+  c.onMessageArrived = (msg) => {
+    try {
+      const data = JSON.parse(msg.payloadString);
+      const text = data.text || '';
+      const sender = data.sender || '';
+      if (!text) return;
+
+      // Detect emotion & show
+      const emotion = detectEmotion(text);
+      setEmotion(emotion);
+      showMessage(text, sender);
+
+      // Speak
+      if (data.speak !== false) {
+        const sname = sender ? sender + '说：' : '';
+        speak(sname + text);
+      }
+    } catch {}
+  };
+
+  c.connect({
+    onSuccess: () => {
+      c.subscribe(TOPIC);
+      statusDot.className = 'dot online';
+      statusText.textContent = '在线 · 等待消息';
+      setEmotion(emotions.default);
+    },
+    onFailure: () => {
+      statusDot.className = 'dot offline';
+      statusText.textContent = '连接失败 · 重试中';
+      setTimeout(connectMQTT, 5000);
+    },
+    useSSL: true,
+    keepAliveInterval: 30,
+    reconnect: true,
+  });
+
+  client = c;
+}
+
+// === Wake lock (keep screen on) ===
+function requestWakeLock() {
+  if ('wakeLock' in navigator) {
+    navigator.wakeLock.request('screen').catch(() => {});
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        navigator.wakeLock.request('screen').catch(() => {});
+      }
+    });
+  }
+}
+
+// === Init ===
+function init() {
+  // Ensure voices are loaded (iOS needs this)
+  speechSynthesis.getVoices();
+  speechSynthesis.onvoiceschanged = () => {};
+
+  connectMQTT();
+  requestWakeLock();
+
+  // Hide tap hint after first tap
+  document.addEventListener('touchstart', () => {
+    tapHint.style.opacity = '0';
+  }, { once: true });
+
+  // Periodically ensure wake lock
+  setInterval(requestWakeLock, 60000);
+}
+
+init();
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
