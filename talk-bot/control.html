@@ -227,7 +227,11 @@ async function sendMessage(text) {
 
     // 3. PUT updated file
     const newContent = JSON.stringify({ messages: msgs });
-    const contentB64 = btoa(unescape(encodeURIComponent(newContent)));
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(newContent);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    const contentB64 = btoa(binary);
 
     const putR = await fetch(API, {
       method: 'PUT',
@@ -242,14 +246,17 @@ async function sendMessage(text) {
         sha: sha
       })
     });
-    if (!putR.ok) throw new Error('write:' + putR.status);
+    if (!putR.ok) {
+      const errBody = await putR.text().catch(() => '');
+      throw new Error('write:' + putR.status + ' ' + errBody.slice(0, 100));
+    }
 
     addToHistory(text.trim(), sender);
     setOnline();
   } catch (e) {
     const msg = e.message || '';
-    if (msg.startsWith('read:')) showToast('发送失败，请重试');
-    else if (msg.startsWith('write:')) showToast('发送冲突，请重试');
+    if (msg.startsWith('read:')) showToast('读取失败(' + msg.split(' ')[0].split(':')[1] + ')，请重试');
+    else if (msg.startsWith('write:')) showToast('写入失败(' + msg.split(' ')[0].split(':')[1] + ')，请重试');
     else showToast('网络错误，请重试');
     setOffline();
   }
