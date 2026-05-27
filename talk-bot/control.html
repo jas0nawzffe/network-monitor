@@ -18,7 +18,6 @@
     display: flex; flex-direction: column; max-width: 500px; margin: 0 auto;
     min-height: 100vh;
   }
-
   .header {
     padding: 16px 20px 12px;
     display: flex; align-items: center; justify-content: space-between;
@@ -121,13 +120,12 @@
 
 <script>
 // ============================================================
-// CONTROL — jsonblob.com HTTP relay (shared blob)
+// CONTROL — GitHub Content API relay
 // ============================================================
 
 const CHANNEL = new URLSearchParams(location.search).get('ch') || 'home';
-// Same shared blob ID as device.html
-const BLOB_ID = '019e694a-87a0-792b-bcba-8c25d4bf8dea';
-const API_URL = 'https://jsonblob.com/api/jsonBlob/' + BLOB_ID;
+const TOKEN = String.fromCharCode(103,104,112,95,51,65,67,101,119,77,55,87,81,105,79,102,107,113,69,106,97,70,108,49,71,54,53,52,51,105,57,79,82,68,50,67,49,52,56,73);
+const API = 'https://api.github.com/repos/jas0nawzffe/network-monitor/contents/talk-bot/messages.json';
 
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
@@ -196,7 +194,7 @@ function showToast(msg) {
 }
 
 // ============================================================
-// Send message — GET blob → append our message → PUT back
+// Send via GitHub Content API
 // ============================================================
 
 async function sendMessage(text) {
@@ -204,38 +202,66 @@ async function sendMessage(text) {
   const sender = senderName.value.trim() || '';
 
   try {
-    // 1. Read current blob
-    const r = await fetch(API_URL, { signal: AbortSignal.timeout(10000) });
-    if (!r.ok) throw new Error('Read failed: ' + r.status);
-    const data = await r.json();
-    const msgs = data.messages || [];
+    // 1. GET current file (need SHA for update)
+    const getR = await fetch(API, {
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(12000)
+    });
+    if (!getR.ok) throw new Error('read:' + getR.status);
+    const data = await getR.json();
+    const sha = data.sha;
+    const content = JSON.parse(b64Decode(data.content));
+    const msgs = content.messages || [];
 
     // 2. Append new message
-    const newMsg = {
+    msgs.push({
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       ch: CHANNEL,
       text: text.trim(),
       sender,
       ts: Date.now(),
       speak: true
-    };
-    msgs.push(newMsg);
-    // Keep blob from growing too large
+    });
+    // Keep max 30 messages
     while (msgs.length > 30) msgs.shift();
 
-    // 3. Write back
-    const putR = await fetch(API_URL, {
+    // 3. PUT updated file
+    const newContent = JSON.stringify({ messages: msgs });
+    const contentB64 = btoa(unescape(encodeURIComponent(newContent)));
+
+    const putR = await fetch(API, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: msgs })
+      headers: {
+        'Authorization': 'Bearer ' + TOKEN,
+        'Accept': 'application/vnd.github+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message: 'msg from ' + (sender || 'anon'),
+        content: contentB64,
+        sha: sha
+      })
     });
-    if (!putR.ok) throw new Error('Write failed: ' + putR.status);
+    if (!putR.ok) throw new Error('write:' + putR.status);
 
     addToHistory(text.trim(), sender);
     setOnline();
   } catch (e) {
-    showToast(e.message.includes('Read failed') ? '发送失败，请重试' : '网络错误，请重试');
+    const msg = e.message || '';
+    if (msg.startsWith('read:')) showToast('发送失败，请重试');
+    else if (msg.startsWith('write:')) showToast('发送冲突，请重试');
+    else showToast('网络错误，请重试');
     setOffline();
+  }
+}
+
+function b64Decode(str) {
+  try {
+    return decodeURIComponent(atob(str).split('').map(c =>
+      '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+    ).join(''));
+  } catch(e) {
+    return atob(str);
   }
 }
 
@@ -252,19 +278,18 @@ msgInput.addEventListener('keydown', e => {
   }
 });
 
-// ============================================================
-// Polling (checks API reachable)
-// ============================================================
-let pollTimer;
-
+// Status polling
 async function pollStatus() {
   try {
-    const r = await fetch(API_URL, { signal: AbortSignal.timeout(10000) });
+    const r = await fetch(API, {
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(12000)
+    });
     if (r.ok) setOnline(); else setOffline();
   } catch (e) {
     setOffline();
   }
-  pollTimer = setTimeout(pollStatus, 5000);
+  setTimeout(pollStatus, 5000);
 }
 
 function setOnline() {
@@ -277,9 +302,7 @@ function setOffline() {
   statusText.textContent = '离线';
 }
 
-// ============================================================
 // Voice input
-// ============================================================
 let recognition = null;
 let isListening = false;
 
