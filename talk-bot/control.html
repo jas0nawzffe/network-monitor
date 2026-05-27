@@ -19,7 +19,6 @@
     min-height: 100vh;
   }
 
-  /* Header */
   .header {
     padding: 16px 20px 12px;
     display: flex; align-items: center; justify-content: space-between;
@@ -31,7 +30,6 @@
     background: #e04040; transition: background 0.3s; }
   .device-status .dot.online { background: #00e5a0; box-shadow: 0 0 6px #00e5a0; }
 
-  /* Sender input */
   .sender-row {
     padding: 8px 20px;
     display: flex; align-items: center; gap: 8px; font-size: 0.82em; color: #888;
@@ -43,7 +41,6 @@
   }
   .sender-row input::placeholder { color: #555; }
 
-  /* Message history */
   .history {
     flex: 1; overflow-y: auto; padding: 12px 16px;
     display: flex; flex-direction: column; gap: 8px;
@@ -58,7 +55,6 @@
   .msg-bubble .sender-label { font-size: 0.75em; color: #6a8aaa; margin-bottom: 2px; }
   .empty-state { text-align: center; color: #3a3a5a; padding: 40px 20px; font-size: 0.9em; line-height: 1.6; }
 
-  /* Quick messages */
   .quick-msgs {
     padding: 8px 16px 4px;
     display: flex; gap: 8px; overflow-x: auto; flex-wrap: wrap;
@@ -72,7 +68,6 @@
   }
   .quick-btn:active { background: rgba(255,255,255,0.1); color: #fff; }
 
-  /* Input area */
   .input-area {
     padding: 12px 16px max(16px, env(safe-area-inset-bottom));
     display: flex; gap: 8px; align-items: center; border-top: 1px solid rgba(255,255,255,0.05);
@@ -100,7 +95,6 @@
   @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(224,64,64,0.4); }
     50% { box-shadow: 0 0 0 12px rgba(224,64,64,0); } }
 
-  /* Toast */
   .toast {
     position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); z-index: 10;
     padding: 8px 20px; border-radius: 20px; background: rgba(0,229,160,0.15);
@@ -127,14 +121,14 @@
 
 <script>
 // ============================================================
-// CONTROL PANEL — jsonblob.com HTTP relay
+// CONTROL — jsonblob.com HTTP relay (shared blob)
 // ============================================================
 
-const CHANNEL = 'yunqi-talkbot-' + (new URLSearchParams(location.search).get('ch') || 'home');
-const API_BASE = 'https://jsonblob.com/api/jsonBlob';
-let blobId = localStorage.getItem('tb-blob-' + CHANNEL);
+const CHANNEL = new URLSearchParams(location.search).get('ch') || 'home';
+// Same shared blob ID as device.html
+const BLOB_ID = '019e694a-87a0-792b-bcba-8c25d4bf8dea';
+const API_URL = 'https://jsonblob.com/api/jsonBlob/' + BLOB_ID;
 
-// DOM
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
 const historyEl = document.getElementById('history');
@@ -145,7 +139,6 @@ const quickMsgs = document.getElementById('quickMsgs');
 const senderName = document.getElementById('senderName');
 const toast = document.getElementById('toast');
 
-// Quick messages
 const quickMessages = [
   '加油！你最棒了！',
   '吃饭了吗？🍚',
@@ -169,7 +162,6 @@ quickMsgs.addEventListener('click', e => {
   }
 });
 
-// Message history
 let msgHistory = [];
 const MAX_HISTORY = 50;
 
@@ -195,7 +187,6 @@ function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Toast
 let toastTimer;
 function showToast(msg) {
   toast.textContent = msg;
@@ -205,68 +196,46 @@ function showToast(msg) {
 }
 
 // ============================================================
-// JSON Blob relay
+// Send message — GET blob → append our message → PUT back
 // ============================================================
-
-async function ensureBlob() {
-  if (blobId) return blobId;
-  const r = await fetch(API_BASE, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages: [] })
-  });
-  if (!r.ok) throw new Error('Cannot create blob');
-  const location = r.headers.get('Location');
-  blobId = location.split('/').pop();
-  localStorage.setItem('tb-blob-' + CHANNEL, blobId);
-  return blobId;
-}
 
 async function sendMessage(text) {
   if (!text || !text.trim()) return;
   const sender = senderName.value.trim() || '';
 
   try {
-    await ensureBlob();
-    // Read current blob, append message, write back
-    const r = await fetch(API_BASE + '/' + blobId, {
-      signal: AbortSignal.timeout(10000)
-    });
-    if (!r.ok) {
-      if (r.status === 404 || r.status === 410) {
-        blobId = null;
-        localStorage.removeItem('tb-blob-' + CHANNEL);
-      }
-      showToast('发送失败，请重试');
-      return;
-    }
+    // 1. Read current blob
+    const r = await fetch(API_URL, { signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new Error('Read failed: ' + r.status);
     const data = await r.json();
     const msgs = data.messages || [];
+
+    // 2. Append new message
     const newMsg = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      ch: CHANNEL,
       text: text.trim(),
       sender,
       ts: Date.now(),
       speak: true
     };
     msgs.push(newMsg);
-    // Keep only last 20 messages to avoid blob getting too large
-    while (msgs.length > 20) msgs.shift();
+    // Keep blob from growing too large
+    while (msgs.length > 30) msgs.shift();
 
-    const putR = await fetch(API_BASE + '/' + blobId, {
+    // 3. Write back
+    const putR = await fetch(API_URL, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages: msgs })
     });
-    if (!putR.ok) {
-      showToast('发送失败，请重试');
-      return;
-    }
+    if (!putR.ok) throw new Error('Write failed: ' + putR.status);
+
     addToHistory(text.trim(), sender);
-    updateStatus(true);
+    setOnline();
   } catch (e) {
-    showToast('网络错误，请重试');
-    updateStatus(false);
+    showToast(e.message.includes('Read failed') ? '发送失败，请重试' : '网络错误，请重试');
+    setOffline();
   }
 }
 
@@ -284,34 +253,28 @@ msgInput.addEventListener('keydown', e => {
 });
 
 // ============================================================
-// Polling (for device online status)
+// Polling (checks API reachable)
 // ============================================================
 let pollTimer;
 
 async function pollStatus() {
   try {
-    if (!blobId) { updateStatus(false); return; }
-    const r = await fetch(API_BASE + '/' + blobId, {
-      signal: AbortSignal.timeout(10000)
-    });
-    if (!r.ok) {
-      if (r.status === 404 || r.status === 410) {
-        blobId = null;
-        localStorage.removeItem('tb-blob-' + CHANNEL);
-      }
-      updateStatus(false);
-      return;
-    }
-    updateStatus(true);
+    const r = await fetch(API_URL, { signal: AbortSignal.timeout(10000) });
+    if (r.ok) setOnline(); else setOffline();
   } catch (e) {
-    updateStatus(false);
+    setOffline();
   }
   pollTimer = setTimeout(pollStatus, 5000);
 }
 
-function updateStatus(online) {
-  statusDot.className = 'dot' + (online ? ' online' : '');
-  statusText.textContent = online ? '已连接' : '离线';
+function setOnline() {
+  statusDot.className = 'dot online';
+  statusText.textContent = '已连接';
+}
+
+function setOffline() {
+  statusDot.className = 'dot';
+  statusText.textContent = '离线';
 }
 
 // ============================================================
@@ -360,16 +323,12 @@ if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
   micBtn.style.display = 'none';
 }
 
-// ============================================================
-// Init
-// ============================================================
 function init() {
   pollStatus();
   msgInput.focus();
 }
 init();
 
-// Register SW
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

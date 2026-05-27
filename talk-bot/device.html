@@ -76,6 +76,11 @@
     position: fixed; bottom: 60px; z-index: 2;
     font-size: 13px; color: #3a3a5a; text-align: center; width: 100%; transition: opacity 0.5s;
   }
+  .channel-badge {
+    position: fixed; top: 12px; right: 16px; z-index: 2;
+    font-size: 11px; color: #4a4a6a; background: rgba(255,255,255,0.04);
+    padding: 4px 10px; border-radius: 10px;
+  }
 </style>
 </head>
 <body>
@@ -84,17 +89,20 @@
 <div class="message" id="message"></div>
 <div class="sender" id="sender"></div>
 <div class="tap-hint" id="tapHint">👆 戳戳我互动</div>
+<div class="channel-badge" id="channelBadge"></div>
 <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">连接中...</span></div>
 
 <script>
 // ============================================================
-// SIMPLE POLLING RELAY — No MQTT dependency
-// Uses a free JSON store as message relay
+// DEVICE — jsonblob.com HTTP polling relay
 // ============================================================
 
-const CHANNEL = 'yunqi-talkbot-' + (new URLSearchParams(location.search).get('ch') || 'home');
-const API_BASE = 'https://jsonblob.com/api/jsonBlob';
-let blobId = localStorage.getItem('tb-blob-' + CHANNEL);
+const CHANNEL = new URLSearchParams(location.search).get('ch') || 'home';
+// Shared blob ID — both device and control use this same ID
+const BLOB_ID = '019e694a-87a0-792b-bcba-8c25d4bf8dea';
+const API_URL = 'https://jsonblob.com/api/jsonBlob/' + BLOB_ID;
+
+document.getElementById('channelBadge').textContent = '#' + CHANNEL;
 
 // DOM
 const faceEl = document.getElementById('face');
@@ -186,43 +194,20 @@ faceEl.addEventListener('click', () => {
 });
 
 // ============================================================
-// Message Polling (replaces MQTT)
+// Polling — reads blob, filters by channel
 // ============================================================
 let lastMsgId = '';
 let pollTimer;
 
-async function ensureBlob() {
-  if (blobId) return blobId;
-  // Create a new blob
-  const r = await fetch(API_BASE, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages: [], lastId: '' })
-  });
-  if (!r.ok) throw new Error('Cannot create blob');
-  const location = r.headers.get('Location');
-  blobId = location.split('/').pop();
-  localStorage.setItem('tb-blob-' + CHANNEL, blobId);
-  return blobId;
-}
-
 async function pollMessages() {
   try {
-    if (!blobId) await ensureBlob();
-    const r = await fetch(API_BASE + '/' + blobId, {
-      signal: AbortSignal.timeout(10000)
-    });
+    const r = await fetch(API_URL, { signal: AbortSignal.timeout(10000) });
     if (!r.ok) {
-      // Blob might have expired, recreate
-      if (r.status === 404 || r.status === 410) {
-        blobId = null;
-        localStorage.removeItem('tb-blob-' + CHANNEL);
-      }
+      setOffline('服务异常 ' + r.status);
       return;
     }
     const data = await r.json();
-    const msgs = data.messages || [];
-    // Find new messages
+    const msgs = (data.messages || []).filter(m => m.ch === CHANNEL);
     for (const m of msgs) {
       if (m.id && m.id !== lastMsgId) {
         lastMsgId = m.id;
@@ -235,20 +220,26 @@ async function pollMessages() {
         }
       }
     }
-    // Update status
-    if (statusDot.className !== 'dot online') {
-      statusDot.className = 'dot online';
-      statusText.textContent = '在线 · 等待消息';
-      setEmotion(emotions.default);
-    }
+    setOnline();
   } catch (e) {
-    // Network error or timeout — will retry
-    if (statusDot.className !== 'dot offline') {
-      statusDot.className = 'dot offline';
-      statusText.textContent = '离线 · 重试中...';
-    }
+    setOffline('网络错误');
   }
   pollTimer = setTimeout(pollMessages, 3000);
+}
+
+function setOnline() {
+  if (statusDot.className !== 'dot online') {
+    statusDot.className = 'dot online';
+    statusText.textContent = '在线 · 等待消息';
+    setEmotion(emotions.default);
+  }
+}
+
+function setOffline(reason) {
+  if (statusDot.className !== 'dot offline') {
+    statusDot.className = 'dot offline';
+    statusText.textContent = '离线 · ' + reason;
+  }
 }
 
 // ============================================================
