@@ -193,6 +193,7 @@ faceEl.addEventListener('click', () => {
 // ============================================================
 let seenIds = new Set();
 let lastListTime = 0;
+let dirETag = null;  // ETag cache for conditional requests
 
 function b64Decode(str) {
   try {
@@ -212,18 +213,24 @@ function fetchWithTimeout(url, opts, ms) {
 }
 
 function schedulePoll() {
-  setTimeout(pollMessages, 3000);
+  setTimeout(pollMessages, 1500);
 }
 
 async function pollMessages() {
   var hadError = false;
   try {
-    // 1. List message files
-    var listR = await fetchWithTimeout(MSG_DIR, {
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
-    }, 12000);
-    if (!listR.ok) { setOffline('list:' + listR.status); hadError = true; }
+    // 1. List message files (with ETag for conditional GET)
+    var listHeaders = { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' };
+    if (dirETag) listHeaders['If-None-Match'] = dirETag;
+    var listR = await fetchWithTimeout(MSG_DIR, { headers: listHeaders }, 12000);
+    if (listR.status === 304) {
+      // Nothing changed — ETag matched, skip processing
+      if (!hadError) setOnline();
+    } else if (!listR.ok) { setOffline('list:' + listR.status); hadError = true; }
     else {
+      // Store ETag for next poll
+      var newETag = listR.headers.get('ETag');
+      if (newETag) dirETag = newETag;
       var files = await listR.json();
       if (!Array.isArray(files)) { setOffline('格式错误'); hadError = true; }
       else {
