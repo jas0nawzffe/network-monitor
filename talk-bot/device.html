@@ -81,6 +81,15 @@
     font-size: 11px; color: #4a4a6a; background: rgba(255,255,255,0.04);
     padding: 4px 10px; border-radius: 10px;
   }
+  .debug-panel {
+    position: fixed; bottom: 70px; left: 8px; right: 8px; z-index: 3;
+    font-size: 10px; color: #5a5a7a; background: rgba(0,0,0,0.7);
+    padding: 6px 8px; border-radius: 6px; max-height: 80px; overflow-y: auto;
+    font-family: monospace; line-height: 1.4; opacity: 0.85;
+  }
+  .debug-panel .ok { color: #00e5a0; }
+  .debug-panel .warn { color: #e0a040; }
+  .debug-panel .err { color: #e04040; }
 </style>
 </head>
 <body>
@@ -90,6 +99,7 @@
 <div class="sender" id="sender"></div>
 <div class="tap-hint" id="tapHint">戳戳我互动</div>
 <div class="channel-badge" id="channelBadge"></div>
+<div class="debug-panel" id="debugPanel">⏳ 初始化...</div>
 <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">连接中...</span></div>
 
 <script>
@@ -193,8 +203,17 @@ faceEl.addEventListener('click', () => {
 // ============================================================
 let seenIds = new Set();
 let lastCommitSHA = null;
+let debugLines = [];
 
 const REFS_API = 'https://api.github.com/repos/jas0nawzffe/network-monitor/git/ref/heads/master';
+
+function debugLog(msg, cls) {
+  var now = new Date();
+  var time = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0') + ':' + now.getSeconds().toString().padStart(2,'0');
+  debugLines.push('<span class=\"' + (cls || '') + '\">' + time + ' ' + msg + '</span>');
+  if (debugLines.length > 8) debugLines.shift();
+  document.getElementById('debugPanel').innerHTML = 'v10 · ' + debugLines.join('<br>');
+}
 
 function b64Decode(str) {
   try {
@@ -225,16 +244,18 @@ async function pollMessages() {
       headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
     }, 10000);
 
-    if (!refR.ok) { setOffline('ref:' + refR.status); hadError = true; }
+    if (!refR.ok) { setOffline('ref:' + refR.status); hadError = true; debugLog('Refs API fail HTTP' + refR.status, 'err'); }
     else {
       var refData = await refR.json();
       var currentSHA = refData.object.sha;
 
       if (currentSHA === lastCommitSHA) {
         // No new commits — skip directory listing
-        if (!hadError) setOnline();
+        if (!hadError) { setOnline(); debugLog('SHA=' + currentSHA.slice(0,6) + ' 无变化 跳过', 'ok'); }
       } else {
         // New commit! Update SHA and check for new messages
+        if (lastCommitSHA === null) debugLog('初始化 SHA=' + currentSHA.slice(0,6) + ' 首次拉取', 'ok');
+        else debugLog('SHA变更! ' + (lastCommitSHA||'').slice(0,6) + '→' + currentSHA.slice(0,6) + ' 拉取目录', 'warn');
         lastCommitSHA = currentSHA;
 
         // Step 2: List message files
@@ -242,10 +263,10 @@ async function pollMessages() {
           headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
         }, 12000);
 
-        if (!listR.ok) { setOffline('list:' + listR.status); hadError = true; }
+        if (!listR.ok) { setOffline('list:' + listR.status); hadError = true; debugLog('List API fail HTTP' + listR.status, 'err'); }
         else {
           var files = await listR.json();
-          if (!Array.isArray(files)) { setOffline('格式错误'); hadError = true; }
+          if (!Array.isArray(files)) { setOffline('格式错误'); hadError = true; debugLog('List 返回格式错误', 'err'); }
           else {
             // Step 3: Filter — our channel + new (not seen)
             var newFiles = files.filter(function(f) {
@@ -254,6 +275,7 @@ async function pollMessages() {
               return true;
             });
             if (newFiles.length > 0) {
+              debugLog('发现' + newFiles.length + '条新消息', 'warn');
               // Step 4: Read new messages
               for (var i = 0; i < newFiles.length; i++) {
                 var f = newFiles[i];
@@ -261,12 +283,13 @@ async function pollMessages() {
                   var fileR = await fetchWithTimeout(f.url, {
                     headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
                   }, 10000);
-                  if (!fileR.ok) continue;
+                  if (!fileR.ok) { debugLog('读取文件失败 HTTP' + fileR.status, 'err'); continue; }
                   var fileData = await fileR.json();
                   var msg = JSON.parse(b64Decode(fileData.content));
                   seenIds.add(f.name);
                   if (msg.ch !== CHANNEL) continue;
 
+                  debugLog('收到: ' + msg.text.slice(0, 15), 'ok');
                   var emotion = detectEmotion(msg.text);
                   setEmotion(emotion);
                   showMessage(msg.text, msg.sender);
@@ -274,7 +297,7 @@ async function pollMessages() {
                     var prefix = msg.sender ? msg.sender + '说：' : '';
                     speak(prefix + msg.text);
                   }
-                } catch (e) { /* skip bad files */ }
+                } catch (e) { debugLog('解析失败: ' + e.message, 'err'); }
               }
 
               // Step 5: Cleanup — keep only last 50 files
@@ -294,6 +317,8 @@ async function pollMessages() {
                   seenIds.delete(fd.name);
                 }
               }
+            } else {
+              debugLog('SHA变更但无本频道新消息', 'ok');
             }
             if (!hadError) setOnline();
           }
@@ -302,6 +327,7 @@ async function pollMessages() {
     }
   } catch (e) {
     setOffline('网络错误');
+    debugLog('异常: ' + (e.message || 'unknown'), 'err');
   }
   schedulePoll();
 }
