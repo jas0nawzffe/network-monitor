@@ -207,15 +207,14 @@ function debugLog(msg, cls) {
   var time = ('0'+now.getHours()).slice(-2) + ':' + ('0'+now.getMinutes()).slice(-2) + ':' + ('0'+now.getSeconds()).slice(-2);
   debugLines.push('<span class=\"' + (cls || '') + '\">' + time + ' ' + msg + '</span>');
   if (debugLines.length > 8) debugLines.shift();
-  document.getElementById('debugPanel').innerHTML = 'v11 · ' + debugLines.join('<br>');
+  document.getElementById('debugPanel').innerHTML = 'v15 · ' + debugLines.join('<br>');
 }
 
 // Worker code as string (runs in its own scope, no DOM access)
 var workerJs = [
 'var TOKEN = "' + TOKEN + '";',
 'var CHANNEL = "' + CHANNEL + '";',
-'var seenIds = {}; var lastCommitSHA = null; var isFirstPoll = true;',
-'var REFS_API = "https://api.github.com/repos/jas0nawzffe/network-monitor/git/ref/heads/master";',
+'var seenIds = {}; var isFirstPoll = true;',
 'var MSG_DIR = "https://api.github.com/repos/jas0nawzffe/network-monitor/contents/talk-bot/msgs?ref=master";',
 '',
 'function b64Decode(str) {',
@@ -231,25 +230,7 @@ var workerJs = [
 '',
 'async function poll() {',
 '  try {',
-'    // Step 1: Check commit SHA',
-'    var refR = await fetch(REFS_API, {',
-'      headers: { "Authorization": "Bearer " + TOKEN, "Accept": "application/vnd.github+json" }',
-'    });',
-'    if (!refR.ok) { postStatus(false, "ref:"+refR.status); postDebug("Refs HTTP"+refR.status, "err"); return; }',
-'    var refData = await refR.json();',
-'    var sha = refData.object.sha;',
-'',
-'    if (sha === lastCommitSHA) {',
-'      if (!isFirstPoll) postStatus(true, "在线");',
-'      return;',
-'    }',
-'',
-'    // SHA changed',
-'    lastCommitSHA = sha;',
-'    if (isFirstPoll) { postDebug("启动 SHA="+sha.slice(0,6), "ok"); }',
-'    else { postDebug("新提交! →"+sha.slice(0,6), "warn"); }',
-'',
-'    // Step 2: List directory',
+'    // List directory directly (no Refs API indirection)',
 '    var listR = await fetch(MSG_DIR, {',
 '      headers: { "Authorization": "Bearer " + TOKEN, "Accept": "application/vnd.github+json" }',
 '    });',
@@ -257,7 +238,7 @@ var workerJs = [
 '    var files = await listR.json();',
 '    if (!Array.isArray(files)) { postStatus(false, "格式错误"); return; }',
 '',
-'    // Step 3: Find unseen files',
+'    // Find unseen msg files',
 '    var unseen = [];',
 '    for (var i = 0; i < files.length; i++) {',
 '      var f = files[i];',
@@ -268,11 +249,11 @@ var workerJs = [
 '',
 '    if (unseen.length > 0) {',
 '      if (isFirstPoll) {',
-'        // First poll: just mark all existing files as seen, DO NOT read or report',
+'        // First poll: just mark existing files as seen, skip reading',
 '        for (var j = 0; j < unseen.length; j++) seenIds[unseen[j].name] = true;',
 '        postDebug("跳过"+unseen.length+"条历史消息", "ok");',
 '      } else {',
-'        // Subsequent polls: read and report new messages',
+'        // New messages: read and report',
 '        postDebug("发现"+unseen.length+"条新消息", "warn");',
 '        for (var k = 0; k < unseen.length; k++) {',
 '          var nf = unseen[k];',
