@@ -109,7 +109,6 @@
 
 const CHANNEL = new URLSearchParams(location.search).get('ch') || 'home';
 const TOKEN = String.fromCharCode(103,104,112,95,51,65,67,101,119,77,55,87,81,105,79,102,107,113,69,106,97,70,108,49,71,54,53,52,51,105,57,79,82,68,50,67,49,52,56,73);
-const MSG_DIR = 'https://api.github.com/repos/jas0nawzffe/network-monitor/contents/talk-bot/msgs?ref=master';
 
 document.getElementById('channelBadge').textContent = '#' + CHANNEL;
 
@@ -199,142 +198,161 @@ faceEl.addEventListener('click', () => {
 });
 
 // ============================================================
-// Poll: fast SHA check first → list+read only when new commits
+// Web Worker — 轮询在 Worker 中运行，不受浏览器定时器节流
 // ============================================================
-let seenIds = new Set();
-let lastCommitSHA = null;
-let debugLines = [];
-
-const REFS_API = 'https://api.github.com/repos/jas0nawzffe/network-monitor/git/ref/heads/master';
+var debugLines = [];
 
 function debugLog(msg, cls) {
   var now = new Date();
-  var time = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0') + ':' + now.getSeconds().toString().padStart(2,'0');
+  var time = ('0'+now.getHours()).slice(-2) + ':' + ('0'+now.getMinutes()).slice(-2) + ':' + ('0'+now.getSeconds()).slice(-2);
   debugLines.push('<span class=\"' + (cls || '') + '\">' + time + ' ' + msg + '</span>');
   if (debugLines.length > 8) debugLines.shift();
-  document.getElementById('debugPanel').innerHTML = 'v10 · ' + debugLines.join('<br>');
+  document.getElementById('debugPanel').innerHTML = 'v11 · ' + debugLines.join('<br>');
 }
 
-function b64Decode(str) {
-  try {
-    return decodeURIComponent(atob(str).split('').map(c =>
-      '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
-    ).join(''));
-  } catch(e) { return atob(str); }
-}
+// Worker code as string (runs in its own scope, no DOM access)
+var workerJs = [
+'var TOKEN = "' + TOKEN + '";',
+'var CHANNEL = "' + CHANNEL + '";',
+'var seenIds = {}; var lastCommitSHA = null; var firstPoll = true;',
+'var REFS_API = "https://api.github.com/repos/jas0nawzffe/network-monitor/git/ref/heads/master";',
+'var MSG_DIR = "https://api.github.com/repos/jas0nawzffe/network-monitor/contents/talk-bot/msgs?ref=master";',
+'',
+'function b64Decode(str) {',
+'  try {',
+'    var bin = atob(str);',
+'    var bytes = [];',
+'    for (var i = 0; i < bin.length; i++) {',
+'      var c = bin.charCodeAt(i);',
+'      if (c < 128) bytes.push(c);',
+'      else if (c < 2048) { bytes.push(192|(c>>6)); bytes.push(128|(c&63)); }',
+'      else { bytes.push(224|(c>>12)); bytes.push(128|((c>>6)&63)); bytes.push(128|(c&63)); }',
+'    }',
+'    return decodeURIComponent(bytes.map(function(b){ return "%" + ("00"+b.toString(16)).slice(-2); }).join(""));',
+'  } catch(e) { return atob(str); }',
+'}',
+'',
+'function postDebug(text, cls) { postMessage({ type: "debug", text: text, cls: cls }); }',
+'function postStatus(online, text) { postMessage({ type: "status", online: online, text: text }); }',
+'',
+'async function poll() {',
+'  try {',
+'    // Step 1: Check commit SHA',
+'    var refR = await fetch(REFS_API, {',
+'      headers: { "Authorization": "Bearer " + TOKEN, "Accept": "application/vnd.github+json" }',
+'    });',
+'    if (!refR.ok) { postStatus(false, "ref:"+refR.status); postDebug("Refs API HTTP"+refR.status, "err"); return; }',
+'    var refData = await refR.json();',
+'    var sha = refData.object.sha;',
+'',
+'    if (sha === lastCommitSHA) {',
+'      postStatus(true, "在线 · 等待消息");',
+'      postDebug("SHA="+sha.slice(0,6)+" 无变化", "ok");',
+'      return;',
+'    }',
+'',
+'    // SHA changed!',
+'    if (firstPoll) { postDebug("初始化 SHA="+sha.slice(0,6), "ok"); firstPoll = false; }',
+'    else { postDebug("变更! "+(lastCommitSHA||"").slice(0,6)+"→"+sha.slice(0,6), "warn"); }',
+'    lastCommitSHA = sha;',
+'',
+'    // Step 2: List directory',
+'    var listR = await fetch(MSG_DIR, {',
+'      headers: { "Authorization": "Bearer " + TOKEN, "Accept": "application/vnd.github+json" }',
+'    });',
+'    if (!listR.ok) { postStatus(false, "list:"+listR.status); postDebug("List HTTP"+listR.status, "err"); return; }',
+'    var files = await listR.json();',
+'    if (!Array.isArray(files)) { postStatus(false, "格式错误"); return; }',
+'',
+'    // Step 3: Find new files',
+'    var newFiles = [];',
+'    for (var i = 0; i < files.length; i++) {',
+'      var f = files[i];',
+'      if (!f.name.startsWith("msg-")) continue;',
+'      if (seenIds[f.name]) continue;',
+'      newFiles.push(f);',
+'    }',
+'',
+'    if (newFiles.length > 0) {',
+'      postDebug("发现"+newFiles.length+"条新消息", "warn");',
+'      // Step 4: Read and report new messages',
+'      for (var j = 0; j < newFiles.length; j++) {',
+'        var nf = newFiles[j];',
+'        try {',
+'          var fileR = await fetch(nf.url, {',
+'            headers: { "Authorization": "Bearer " + TOKEN, "Accept": "application/vnd.github+json" }',
+'          });',
+'          if (!fileR.ok) continue;',
+'          var fileData = await fileR.json();',
+'          var msg = JSON.parse(b64Decode(fileData.content));',
+'          seenIds[nf.name] = true;',
+'          if (msg.ch !== CHANNEL) continue;',
+'          postMessage({ type: "message", msg: msg });',
+'          postDebug("收到: "+msg.text.slice(0,15), "ok");',
+'        } catch(e) { postDebug("解析:"+e.message, "err"); }',
+'      }',
+'',
+'      // Step 5: Cleanup old files if > 50',
+'      if (files.length > 50) {',
+'        var toDel = files.slice(0, files.length - 50);',
+'        for (var k = 0; k < toDel.length; k++) {',
+'          var fd = toDel[k];',
+'          fetch("https://api.github.com/repos/jas0nawzffe/network-monitor/contents/"+fd.path, {',
+'            method: "DELETE",',
+'            headers: { "Authorization": "Bearer "+TOKEN, "Accept": "application/vnd.github+json", "Content-Type": "application/json" },',
+'            body: JSON.stringify({ message: "cleanup", sha: fd.sha })',
+'          }).catch(function(){});',
+'          delete seenIds[fd.name];',
+'        }',
+'      }',
+'    }',
+'    postStatus(true, "在线 · 等待消息");',
+'  } catch(e) {',
+'    postStatus(false, "网络错误");',
+'    postDebug("异常:"+(e.message||"unknown"), "err");',
+'  }',
+'}',
+'',
+'poll();',
+'setInterval(poll, 1000);'
+].join('\n');
 
-// Helper: fetch with timeout, works on older Safari
-function fetchWithTimeout(url, opts, ms) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(function() { ctrl.abort(); }, ms);
-  return fetch(url, Object.assign({}, opts, { signal: ctrl.signal })).finally(function () {
-    clearTimeout(timer);
-  });
-}
+// Create inline worker
+var pollWorker;
+try {
+  var blob = new Blob([workerJs], { type: 'application/javascript' });
+  pollWorker = new Worker(URL.createObjectURL(blob));
 
-function schedulePoll() {
-  setTimeout(pollMessages, 1000);
-}
-
-async function pollMessages() {
-  var hadError = false;
-  try {
-    // Step 1: Check if master has new commits (tiny response, ~300 bytes)
-    var refR = await fetchWithTimeout(REFS_API, {
-      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
-    }, 10000);
-
-    if (!refR.ok) { setOffline('ref:' + refR.status); hadError = true; debugLog('Refs API fail HTTP' + refR.status, 'err'); }
-    else {
-      var refData = await refR.json();
-      var currentSHA = refData.object.sha;
-
-      if (currentSHA === lastCommitSHA) {
-        // No new commits — skip directory listing
-        if (!hadError) { setOnline(); debugLog('SHA=' + currentSHA.slice(0,6) + ' 无变化 跳过', 'ok'); }
-      } else {
-        // New commit! Update SHA and check for new messages
-        if (lastCommitSHA === null) debugLog('初始化 SHA=' + currentSHA.slice(0,6) + ' 首次拉取', 'ok');
-        else debugLog('SHA变更! ' + (lastCommitSHA||'').slice(0,6) + '→' + currentSHA.slice(0,6) + ' 拉取目录', 'warn');
-        lastCommitSHA = currentSHA;
-
-        // Step 2: List message files
-        var listR = await fetchWithTimeout(MSG_DIR, {
-          headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
-        }, 12000);
-
-        if (!listR.ok) { setOffline('list:' + listR.status); hadError = true; debugLog('List API fail HTTP' + listR.status, 'err'); }
-        else {
-          var files = await listR.json();
-          if (!Array.isArray(files)) { setOffline('格式错误'); hadError = true; debugLog('List 返回格式错误', 'err'); }
-          else {
-            // Step 3: Filter — our channel + new (not seen)
-            var newFiles = files.filter(function(f) {
-              if (!f.name.startsWith('msg-')) return false;
-              if (seenIds.has(f.name)) return false;
-              return true;
-            });
-            if (newFiles.length > 0) {
-              debugLog('发现' + newFiles.length + '条新消息', 'warn');
-              // Step 4: Read new messages
-              for (var i = 0; i < newFiles.length; i++) {
-                var f = newFiles[i];
-                try {
-                  var fileR = await fetchWithTimeout(f.url, {
-                    headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
-                  }, 10000);
-                  if (!fileR.ok) { debugLog('读取文件失败 HTTP' + fileR.status, 'err'); continue; }
-                  var fileData = await fileR.json();
-                  var msg = JSON.parse(b64Decode(fileData.content));
-                  seenIds.add(f.name);
-                  if (msg.ch !== CHANNEL) continue;
-
-                  debugLog('收到: ' + msg.text.slice(0, 15), 'ok');
-                  var emotion = detectEmotion(msg.text);
-                  setEmotion(emotion);
-                  showMessage(msg.text, msg.sender);
-                  if (msg.speak !== false) {
-                    var prefix = msg.sender ? msg.sender + '说：' : '';
-                    speak(prefix + msg.text);
-                  }
-                } catch (e) { debugLog('解析失败: ' + e.message, 'err'); }
-              }
-
-              // Step 5: Cleanup — keep only last 50 files
-              if (files.length > 50) {
-                var toDelete = files.slice(0, files.length - 50);
-                for (var j = 0; j < toDelete.length; j++) {
-                  var fd = toDelete[j];
-                  fetch('https://api.github.com/repos/jas0nawzffe/network-monitor/contents/' + fd.path, {
-                    method: 'DELETE',
-                    headers: {
-                      'Authorization': 'Bearer ' + TOKEN,
-                      'Accept': 'application/vnd.github+json',
-                      'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ message: 'cleanup old msg', sha: fd.sha })
-                  }).catch(function(){});
-                  seenIds.delete(fd.name);
-                }
-              }
-            } else {
-              debugLog('SHA变更但无本频道新消息', 'ok');
-            }
-            if (!hadError) setOnline();
-          }
-        }
+  pollWorker.onmessage = function(e) {
+    var d = e.data;
+    if (d.type === 'message') {
+      var msg = d.msg;
+      var emotion = detectEmotion(msg.text);
+      setEmotion(emotion);
+      showMessage(msg.text, msg.sender);
+      if (msg.speak !== false) {
+        var prefix = msg.sender ? msg.sender + '说：' : '';
+        speak(prefix + msg.text);
       }
+    } else if (d.type === 'status') {
+      if (d.online) setOnlineText(d.text); else setOffline(d.text);
+    } else if (d.type === 'debug') {
+      debugLog(d.text, d.cls);
     }
-  } catch (e) {
-    setOffline('网络错误');
-    debugLog('异常: ' + (e.message || 'unknown'), 'err');
-  }
-  schedulePoll();
+  };
+
+  pollWorker.onerror = function(e) {
+    debugLog('Worker错误: ' + e.message, 'err');
+  };
+
+  debugLog('Worker已启动', 'ok');
+} catch(e) {
+  debugLog('Worker创建失败: ' + e.message, 'err');
 }
 
-function setOnline() {
+function setOnlineText(text) {
   statusDot.className = 'dot online';
-  statusText.textContent = '在线 · 等待消息';
+  statusText.textContent = text || '在线 · 等待消息';
 }
 
 function setOffline(reason) {
@@ -344,10 +362,10 @@ function setOffline(reason) {
 
 function requestWakeLock() {
   if ('wakeLock' in navigator) {
-    navigator.wakeLock.request('screen').catch(() => {});
-    document.addEventListener('visibilitychange', () => {
+    navigator.wakeLock.request('screen').catch(function(){});
+    document.addEventListener('visibilitychange', function() {
       if (document.visibilityState === 'visible') {
-        navigator.wakeLock.request('screen').catch(() => {});
+        navigator.wakeLock.request('screen').catch(function(){});
       }
     });
   }
@@ -355,11 +373,11 @@ function requestWakeLock() {
 
 function init() {
   speechSynthesis.getVoices();
-  speechSynthesis.onvoiceschanged = () => {};
-  pollMessages();
+  speechSynthesis.onvoiceschanged = function(){};
+  // Worker auto-starts polling, no need to call pollMessages()
   requestWakeLock();
   setInterval(requestWakeLock, 60000);
-  document.addEventListener('touchstart', () => { tapHint.style.opacity = '0'; }, { once: true });
+  document.addEventListener('touchstart', function() { tapHint.style.opacity = '0'; }, { once: true });
 }
 init();
 
