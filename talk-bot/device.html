@@ -189,11 +189,12 @@ faceEl.addEventListener('click', () => {
 });
 
 // ============================================================
-// Poll: list msg files → read new ones
+// Poll: fast SHA check first → list+read only when new commits
 // ============================================================
 let seenIds = new Set();
-let lastListTime = 0;
-let dirETag = null;  // ETag cache for conditional requests
+let lastCommitSHA = null;
+
+const REFS_API = 'https://api.github.com/repos/jas0nawzffe/network-monitor/git/ref/heads/master';
 
 function b64Decode(str) {
   try {
@@ -213,76 +214,90 @@ function fetchWithTimeout(url, opts, ms) {
 }
 
 function schedulePoll() {
-  setTimeout(pollMessages, 1500);
+  setTimeout(pollMessages, 1000);
 }
 
 async function pollMessages() {
   var hadError = false;
   try {
-    // 1. List message files (with ETag for conditional GET)
-    var listHeaders = { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' };
-    if (dirETag) listHeaders['If-None-Match'] = dirETag;
-    var listR = await fetchWithTimeout(MSG_DIR, { headers: listHeaders }, 12000);
-    if (listR.status === 304) {
-      // Nothing changed — ETag matched, skip processing
-      if (!hadError) setOnline();
-    } else if (!listR.ok) { setOffline('list:' + listR.status); hadError = true; }
+    // Step 1: Check if master has new commits (tiny response, ~300 bytes)
+    var refR = await fetchWithTimeout(REFS_API, {
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
+    }, 10000);
+
+    if (!refR.ok) { setOffline('ref:' + refR.status); hadError = true; }
     else {
-      // Store ETag for next poll
-      var newETag = listR.headers.get('ETag');
-      if (newETag) dirETag = newETag;
-      var files = await listR.json();
-      if (!Array.isArray(files)) { setOffline('格式错误'); hadError = true; }
-      else {
-        // 2. Filter: our channel + new (not seen)
-        var newFiles = files.filter(function(f) {
-          if (!f.name.startsWith('msg-')) return false;
-          if (seenIds.has(f.name)) return false;
-          return true;
-        });
-        if (newFiles.length > 0) {
-          // 3. Read new messages
-          for (var i = 0; i < newFiles.length; i++) {
-            var f = newFiles[i];
-            try {
-              var fileR = await fetchWithTimeout(f.url, {
-                headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
-              }, 10000);
-              if (!fileR.ok) continue;
-              var fileData = await fileR.json();
-              var msg = JSON.parse(b64Decode(fileData.content));
-              seenIds.add(f.name);
-              if (msg.ch !== CHANNEL) continue;
+      var refData = await refR.json();
+      var currentSHA = refData.object.sha;
 
-              var emotion = detectEmotion(msg.text);
-              setEmotion(emotion);
-              showMessage(msg.text, msg.sender);
-              if (msg.speak !== false) {
-                var prefix = msg.sender ? msg.sender + '说：' : '';
-                speak(prefix + msg.text);
+      if (currentSHA === lastCommitSHA) {
+        // No new commits — skip directory listing
+        if (!hadError) setOnline();
+      } else {
+        // New commit! Update SHA and check for new messages
+        lastCommitSHA = currentSHA;
+
+        // Step 2: List message files
+        var listR = await fetchWithTimeout(MSG_DIR, {
+          headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
+        }, 12000);
+
+        if (!listR.ok) { setOffline('list:' + listR.status); hadError = true; }
+        else {
+          var files = await listR.json();
+          if (!Array.isArray(files)) { setOffline('格式错误'); hadError = true; }
+          else {
+            // Step 3: Filter — our channel + new (not seen)
+            var newFiles = files.filter(function(f) {
+              if (!f.name.startsWith('msg-')) return false;
+              if (seenIds.has(f.name)) return false;
+              return true;
+            });
+            if (newFiles.length > 0) {
+              // Step 4: Read new messages
+              for (var i = 0; i < newFiles.length; i++) {
+                var f = newFiles[i];
+                try {
+                  var fileR = await fetchWithTimeout(f.url, {
+                    headers: { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/vnd.github+json' }
+                  }, 10000);
+                  if (!fileR.ok) continue;
+                  var fileData = await fileR.json();
+                  var msg = JSON.parse(b64Decode(fileData.content));
+                  seenIds.add(f.name);
+                  if (msg.ch !== CHANNEL) continue;
+
+                  var emotion = detectEmotion(msg.text);
+                  setEmotion(emotion);
+                  showMessage(msg.text, msg.sender);
+                  if (msg.speak !== false) {
+                    var prefix = msg.sender ? msg.sender + '说：' : '';
+                    speak(prefix + msg.text);
+                  }
+                } catch (e) { /* skip bad files */ }
               }
-            } catch (e) { /* skip bad files */ }
-          }
 
-          // 4. Cleanup: keep only last 50 files
-          if (files.length > 50) {
-            var toDelete = files.slice(0, files.length - 50);
-            for (var j = 0; j < toDelete.length; j++) {
-              var fd = toDelete[j];
-              fetch('https://api.github.com/repos/jas0nawzffe/network-monitor/contents/' + fd.path, {
-                method: 'DELETE',
-                headers: {
-                  'Authorization': 'Bearer ' + TOKEN,
-                  'Accept': 'application/vnd.github+json',
-                  'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ message: 'cleanup old msg', sha: fd.sha })
-              }).catch(function(){});
-              seenIds.delete(fd.name);
+              // Step 5: Cleanup — keep only last 50 files
+              if (files.length > 50) {
+                var toDelete = files.slice(0, files.length - 50);
+                for (var j = 0; j < toDelete.length; j++) {
+                  var fd = toDelete[j];
+                  fetch('https://api.github.com/repos/jas0nawzffe/network-monitor/contents/' + fd.path, {
+                    method: 'DELETE',
+                    headers: {
+                      'Authorization': 'Bearer ' + TOKEN,
+                      'Accept': 'application/vnd.github+json',
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message: 'cleanup old msg', sha: fd.sha })
+                  }).catch(function(){});
+                  seenIds.delete(fd.name);
+                }
+              }
             }
+            if (!hadError) setOnline();
           }
         }
-        if (!hadError) setOnline();
       }
     }
   } catch (e) {
